@@ -1,0 +1,33 @@
+Respondedor {
+    [ok] Esperar discovery packet (UDP)
+    [ok] Retransmitir discovery packet (UDP)
+    Conectar com requisitor se tiver pacote (TCP)
+    Enviar chunks ao requisitor (TCP)
+}
+
+Requisitor {
+    [ok] Enviar discovery packet (UDP)
+    Aceitar conexoes de envio de chunk (TCP)
+    Receber chunks (TCP)
+    Agir como respondedor (mais de um request) {
+        Esperar discovery packet (UDP)
+        Retransmitir discovery packet (UDP)
+        Conectar com requisitor (TCP)
+        Enviar chunks ao requisitor (TCP)
+    }
+}
+
+Multiplos chunks sao enviados em multiplas conexoes TCP
+
+UDP (bloqueante vs. nao bloqueante) {
+    Conexao:     sem            | sem
+    Envio:       nao bloqueante | nao bloqueante
+    Recebimento: bloqueante     | nao bloquenate
+}
+
+TCP (bloqueante vs. nao bloqueante) {
+    Conexao:     bloqueante          | nao bloquante
+    Envio:       nao bloqueante (SO) | nao bloqueante
+    Recebimento: bloqueante          | nao bloqueante
+}
+
