@@ -1,20 +1,13 @@
-Respondedor {
-    [ok] Esperar discovery packet (UDP)
-    [ok] Retransmitir discovery packet (UDP)
-    Conectar com requisitor se tiver pacote (TCP)
-    Enviar chunks ao requisitor (TCP)
+Notas {
+    Limitar taxa de envio para todos os TCP
+    Adicionar tempo de reenvio
 }
 
-Requisitor {
-    [ok] Enviar discovery packet (UDP)
-    Aceitar conexoes de envio de chunk (TCP)
-    Receber chunks (TCP)
-    Agir como respondedor (mais de um request) {
-        Esperar discovery packet (UDP)
-        Retransmitir discovery packet (UDP)
-        Conectar com requisitor (TCP)
-        Enviar chunks ao requisitor (TCP)
-    }
+Threads (T) {
+    1: ler input aa espera de requisicao, enviar discovery request packet (UDP), receber discovery response packet (UDP)
+    2: receber e retransmitir discovery request packets, enviar discovery response packets (UDP)
+    3...: abrir conexao, enviar chunks (TCP)
+    4...: conectar-se, receber chunks (TCP)
 }
 
 Multiplos chunks sao enviados em multiplas conexoes TCP

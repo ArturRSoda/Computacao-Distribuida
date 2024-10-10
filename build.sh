@@ -1,4 +1,4 @@
-g++ -o main main.cpp -Wall -Wextra -g
+g++ -o main main.cpp -Wall -Wextra -Wno-unused-label -g
 cp main 0/
 cp main 1/
 cp main 2/

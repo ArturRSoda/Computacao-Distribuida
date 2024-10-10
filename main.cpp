@@ -8,13 +8,16 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <list>
 #include <fstream>
 #include <string>
+#include <tuple>
 
 #include <unistd.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <pthread.h>
 
 using std::vector;
 using std::stringstream;
@@ -23,21 +26,46 @@ using std::string;
 using std::to_string;
 using std::cout;
 using std::cin;
+using std::list;
+using std::move;
+using std::tuple;
+using std::get;
 
-struct Config {
+using Thread_Function = void*(void*);
+
+struct Node {
+    int id;
     string ip;
     uint16_t port;
-    int transmission_rate;
 };
 
 struct Data {
-    int id;
-    vector<int> neighbors;
-    vector<Config> configs;
+    Node this_node;
+    int transmission_rate;
+
+    vector<Node> neighbors;
+
     string metadata_file_name;
     int chunk_count;
     int ttl;
+
+    pthread_t request_file_thread;
+    pthread_t retransmit_request_thread;
+    vector<pthread_t> send_chunk_threads;
+    vector<pthread_t> receive_chunk_threads;
 };
+
+struct Chunk {
+};
+
+int perror_check(int return_value) {
+    if (return_value == -1) {
+        perror("ERROR");
+        assert(false);
+        exit(1);
+    }
+    return return_value;
+}
 
 vector<vector<int>> read_topology() {
     ifstream file("../topologia.txt");
@@ -86,6 +114,12 @@ vector<vector<int>> read_topology() {
     return topology;
 }
 
+struct Config {
+    string ip;
+    uint16_t port;
+    int transmission_rate;
+};
+
 vector<Config> read_config() {
     ifstream file("../config.txt");
     assert(file.is_open());
@@ -123,7 +157,6 @@ vector<Config> read_config() {
                     break;
                 }
 
-                // TODO(felipe): this code breaks if the comma does not come immediately after the ip
                 if (c == ',') {
                     break;
                 }
@@ -143,6 +176,21 @@ vector<Config> read_config() {
     return configs;
 }
 
+void set_nodes(Data* data, int this_id) {
+    vector<vector<int>> topology = read_topology();
+    vector<Config> configs = read_config();
+
+    vector<Node> neighbors;
+    for (int neighbor_id : topology[this_id]) {
+        Config* neighbor_config = &configs[neighbor_id];
+        neighbors.push_back({neighbor_id, neighbor_config->ip, neighbor_config->port});
+    }
+    data->neighbors = neighbors;
+    data->this_node.ip = configs[data->this_node.id].ip;
+    data->this_node.port = configs[data->this_node.id].port;
+    data->transmission_rate = configs[data->this_node.id].transmission_rate;
+}
+
 void read_and_set_metadata(Data* data) {
     ifstream file("../arquivo.p2p");
     assert(file.is_open());
@@ -152,56 +200,26 @@ void read_and_set_metadata(Data* data) {
     file >> data->ttl;
 }
 
-int perror_check(int return_value) {
-    if (return_value == -1) {
-        perror("ERROR");
-        assert(false);
-        exit(1);
-    }
-    return return_value;
-}
-
-struct Discovery_Package {
+struct Discovery_Request_Package {
     string file;
-    vector<int> chunks;
     int ttl;
-    string ip;
-    uint16_t port;
-    int request_id;
+    int last_id;  // NOTE(felipe): used to not retransmit to the receiver
 };
 
-constexpr int discovery_package_max_size = 4096;
+constexpr int discovery_request_max_size = 4096;
 
-Discovery_Package unserialize_discovery_package(string* serialized) {
+Discovery_Request_Package unserialize_discovery_request_package(string* serialized) {
     stringstream all_lines(*serialized);
 
     string file;
-    vector<int> chunks;
     int ttl;
-    string ip;
-    uint16_t port;
-    int request_id;
+    int id;
     {
         string s;
         getline(all_lines, s);
         stringstream line(s);
 
         line >> file;
-    }
-    {
-        string s;
-        getline(all_lines, s);
-        stringstream line(s);
-
-        while (true) {
-            int chunk;
-            line >> chunk;
-            if (!line) {
-                break;
-            }
-
-            chunks.push_back(chunk);
-        }
     }
     {
         string s;
@@ -215,73 +233,105 @@ Discovery_Package unserialize_discovery_package(string* serialized) {
         getline(all_lines, s);
         stringstream line(s);
         
+        line >> id;
+    }
+
+    return Discovery_Request_Package{file, ttl, id};
+}
+
+string serialize_discovery_request_package(Discovery_Request_Package* package) {
+    string s;
+
+    s += package->file;
+    s += '\n';
+
+    s += to_string(package->ttl);
+    s += '\n';
+
+    s += to_string(package->last_id);
+    s += '\n';
+
+    return s;
+}
+
+struct Discovery_Response_Package {
+    string ip;
+    uint16_t port;
+    int chunk;
+};
+
+constexpr int discovery_response_package_max_size = 4096;
+
+Discovery_Response_Package unserialize_discovery_response_package(string* serialized) {
+    stringstream all_lines(*serialized);
+
+    string ip;
+    uint16_t port;
+    int chunk;
+    {
+        string s;
+        getline(all_lines, s);
+        stringstream line(s);
+
         line >> ip;
     }
     {
         string s;
         getline(all_lines, s);
         stringstream line(s);
-        
+
         line >> port;
     }
     {
         string s;
         getline(all_lines, s);
         stringstream line(s);
-        
-        line >> request_id;
+
+        line >> chunk;
     }
 
-    return Discovery_Package{file, chunks, ttl, ip, port, request_id};
+    return Discovery_Response_Package{ip, port, chunk};
 }
 
-string serialize_discovery_package(Discovery_Package* package) {
+string serialize_discovery_response_package(Discovery_Response_Package* package) {
     string s;
-
-    s += package->file;
-    s += '\n';
-
-    bool first = true;
-    for (int chunk : package->chunks) {
-        if (!first) {
-            s += " ";
-        }
-        first = false;
-        s += to_string(chunk);
-    }
-    s += "\n";
-
-    s += to_string(package->ttl);
-    s += '\n';
 
     s += package->ip;
     s += '\n';
 
-    s += to_string(package->port);
+    s += package->port;
     s += '\n';
 
-    s += to_string(package->request_id);
+    s += package->chunk;
     s += '\n';
 
     return s;
 }
 
-int create_non_blocking_udp_socket() {
-    int this_socket = perror_check(
-        socket(AF_INET, SOCK_DGRAM, 0));
-
-    int flags = fcntl(this_socket, F_GETFL, 0);
-    fcntl(this_socket, F_SETFL, O_NONBLOCK|flags);
-
-    return this_socket;
+int tcp_create_socket() {
+    return perror_check(
+        socket(AF_INET, SOCK_STREAM, 0));
 }
 
-int create_blocking_udp_socket() {
+int udp_create_socket() {
     return perror_check(
         socket(AF_INET, SOCK_DGRAM, 0));
 }
 
-void my_bind(int this_socket, int address, uint16_t port) {
+void tcp_bind(int this_socket, int address, uint16_t port) {
+    sockaddr_in s_addr = {};
+    s_addr.sin_family = AF_INET;
+    s_addr.sin_addr.s_addr = address;
+    s_addr.sin_port = htons(port);
+    perror_check(
+        bind(this_socket, (const struct sockaddr*)&s_addr, sizeof(s_addr)));
+
+    constexpr int max_connections = 100;
+    perror_check(
+        listen(this_socket, max_connections));
+}
+
+void udp_bind(int this_socket, int address, uint16_t port) {
     sockaddr_in s_addr = {};
     s_addr.sin_family = AF_INET;
     s_addr.sin_addr.s_addr = address;
@@ -290,23 +340,34 @@ void my_bind(int this_socket, int address, uint16_t port) {
         bind(this_socket, (const struct sockaddr*)&s_addr, sizeof(s_addr)));
 }
 
-string udp_receive(int this_socket, int max_bytes) {
+void tcp_connect(int this_socket, int address, uint16_t port) {
+    sockaddr_in s_addr = {};
+    s_addr.sin_family = AF_INET;
+    s_addr.sin_addr.s_addr = address;
+    s_addr.sin_port = htons(port);
+    perror_check(
+        connect(this_socket, (sockaddr*)&s_addr, sizeof(s_addr)));
+}
+
+string general_receive(int this_socket, int max_bytes, in_addr_t* ip = 0, in_port_t* port = 0) {
     string s;
     s.resize(max_bytes);
 
-    sockaddr_in other_address = {};
-    socklen_t other_address_len = sizeof(other_address);
+    sockaddr_in receiving_address = {};
+    socklen_t receiving_size = sizeof(receiving_address);
+
     int n = recvfrom(
-            this_socket, s.data(), s.size(),
-            MSG_WAITALL, (struct sockaddr*)&other_address, &other_address_len
+        this_socket, s.data(), s.size(),
+        MSG_WAITALL, (struct sockaddr*)&receiving_address, &receiving_size
     );
 
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return {};
-        } else {
-            perror_check(n);
-        }
+    perror_check(n);
+
+    if (ip) {
+        *ip = receiving_address.sin_addr.s_addr;
+    }
+    if (port) {
+        *port = ntohs(receiving_address.sin_port);
     }
 
     s.resize(n);
@@ -314,7 +375,15 @@ string udp_receive(int this_socket, int max_bytes) {
     return s;
 }
 
-void udp_send(int this_socket, in_addr_t ip, uint16_t port, string* message) {
+string tcp_receive(int this_socket, int max_bytes, in_addr_t* ip = 0, in_port_t* port = 0) {
+    return general_receive(this_socket, max_bytes, ip, port);
+}
+
+string udp_receive(int this_socket, int max_bytes, in_addr_t* ip = 0, in_port_t* port = 0) {
+    return general_receive(this_socket, max_bytes, ip, port);
+}
+
+void general_send(int this_socket, in_addr_t ip, uint16_t port, string* message) {
     sockaddr_in s_addr = {};
     s_addr.sin_family = AF_INET;
     s_addr.sin_addr.s_addr = ip;
@@ -328,37 +397,19 @@ void udp_send(int this_socket, in_addr_t ip, uint16_t port, string* message) {
     );
 }
 
+void tcp_send(int this_socket, in_addr_t ip, uint16_t port, string* message) {
+    general_send(this_socket, ip, port, message);
+}
+
+void udp_send(int this_socket, in_addr_t ip, uint16_t port, string* message) {
+    general_send(this_socket, ip, port, message);
+}
+
+
 // TODO(felipe): retransmit UDP discovery transmission (timeout?)
-void peer_to_peer_request_file(Data* data) {
-    vector<int> chunks;
-    for (int i = 0; i < data->chunk_count; i++) {
-        chunks.push_back(i);
-    }
+// TODO(felipe): consider that a chunk may not exist in all nodes
 
-    Config* this_config = &data->configs[data->id];
-
-    Discovery_Package package = {
-        data->metadata_file_name,
-        chunks,
-        data->ttl,
-        this_config->ip,
-        this_config->port,
-        data->id
-    };
-    package.ttl--;
-
-    string serialized_package = serialize_discovery_package(&package);
-
-    int this_socket = create_blocking_udp_socket();
-
-    for (int neighbor : data->neighbors) {
-        Config* neighbor_config = &data->configs[neighbor];
-
-        in_addr_t ip = inet_addr(neighbor_config->ip.c_str());
-        uint16_t port = neighbor_config->port;
-        udp_send(this_socket, ip, port, &serialized_package);
-    }
-
+void* send_chunk(void*) {
     //{
     //    int server_sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -397,87 +448,166 @@ void peer_to_peer_request_file(Data* data) {
     //            clients.push_back(client_sockfd);
     //        }
 
-    //        //receive_chunks(data, &clients);
+    //        //send_chunk(data, &clients);
     //    }
     //}
+
+    return 0;
 }
 
-// TODO(felipe): consider that a chunk may not exist in all nodes
+void* receive_chunk(tuple<Discovery_Response_Package, Chunk>* tuple_arg) {
+    Discovery_Response_Package* package = &get<0>(*tuple_arg);
+    Chunk* chunk = &get<1>(*tuple_arg);
 
-void peer_to_peer_respond_file(Data* data) {
-    Config* this_config = &data->configs[data->id];
-    Discovery_Package discovery_package;
+    int this_socket = tcp_create_socket();
 
-    int this_socket = create_blocking_udp_socket();
+    int server_ip = inet_addr(package->ip.c_str());
+    uint16_t server_port = package->port;
+    tcp_connect(this_socket, server_ip, server_port);
 
-    {
-        int this_socket = create_blocking_udp_socket();
+    close(this_socket);
 
-        int ip = inet_addr("127.0.0.1");
-        uint16_t port = this_config->port;
-        my_bind(this_socket, ip, port);
+    return 0;
+}
 
-        // TODO: blocking
-        string s = udp_receive(this_socket, discovery_package_max_size);
+void* retransmit_request(Data* data) {
+    Discovery_Request_Package received_package;
+    receive_package: {
+        int this_socket = udp_create_socket();
 
-        discovery_package = unserialize_discovery_package(&s);
-        cout << s;
+        int ip = INADDR_ANY;
+        uint16_t port = data->this_node.port;
+        udp_bind(this_socket, ip, port);
+
+        string s = udp_receive(this_socket, discovery_request_max_size);
+
+        received_package = unserialize_discovery_request_package(&s);
+
+        close(this_socket); 
     }
-    // TODO: add retransmit time
-    {
-        discovery_package.ttl--;
 
-        if (discovery_package.ttl > 0) {
-            string serialized_package = serialize_discovery_package(&discovery_package);
+    sleep(1);
 
-            for (int neighbor : data->neighbors) {
-                if (neighbor == discovery_package.request_id) {
+    retransmit_package: {
+        int this_socket = udp_create_socket();
+
+        Discovery_Request_Package to_send_package = received_package;
+        to_send_package.ttl--;
+        to_send_package.last_id = data->this_node.id;
+
+        if (to_send_package.ttl > 0) {
+            string serialized_package = serialize_discovery_request_package(&to_send_package);
+
+            for (Node& neighbor : data->neighbors) {
+                if (neighbor.id == received_package.last_id) {
                     continue;
                 }
 
-                Config* neighbor_config = &data->configs[neighbor];
-
-                in_addr_t ip = inet_addr(neighbor_config->ip.c_str());
-                uint16_t port = neighbor_config->port;
-                udp_send(this_socket, ip, port, &serialized_package);
+                int neighbor_ip = inet_addr(neighbor.ip.c_str());
+                uint16_t neighbor_port = neighbor.port;
+                udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_package);
             }
         }
+
+        close(this_socket); 
     }
 
-    close(this_socket); 
+    response_package: {
+    }
+
+    return 0;
+}
+
+void* request_file(Data* data) {
+    while (true) {
+        ask: while (true) {
+            cout << "Voce quer requisitar arquivo? [s/n]: ";
+
+            char answer = 0;
+            cin >> answer;
+
+            answer = tolower(answer);
+
+            if (answer != 's' && answer != 'n') {
+                cout << "Entrada invalida\n";
+            }
+
+            if (answer == 's') {
+                break;
+            }
+        }
+
+        request_chunks: {
+            Discovery_Request_Package package = {
+                data->metadata_file_name,
+                data->ttl,
+                data->this_node.id
+            };
+            package.ttl--;
+
+            string serialized_package = serialize_discovery_request_package(&package);
+
+            int this_socket = udp_create_socket();
+
+            for (Node& neighbor : data->neighbors) {
+                int ip = inet_addr(neighbor.ip.c_str());
+                uint16_t port = neighbor.port;
+                udp_send(this_socket, ip, port, &serialized_package);
+            }
+
+            close(this_socket);
+        }
+
+        usleep(1'000);
+
+        create_threads_to_receive_chunks: {
+            int this_socket = udp_create_socket();
+            udp_bind(this_socket, INADDR_ANY, data->this_node.port);
+
+            list<tuple<Discovery_Response_Package, Chunk>> threads_storage;
+                
+            int chunk_count = 0;
+            vector<bool> seen_chunks(data->chunk_count, false);
+            while (chunk_count < data->chunk_count) {
+                in_addr_t ip = 0;
+                in_port_t port = 0;
+                string serialized_package = udp_receive(this_socket, discovery_response_package_max_size, &ip, &port);
+
+                Discovery_Response_Package temp_package = unserialize_discovery_response_package(&serialized_package);
+
+                if (!seen_chunks[temp_package.chunk]) {
+                    seen_chunks[temp_package.chunk] = true;
+
+                    threads_storage.push_back({std::move(temp_package), Chunk{}});
+
+                    pthread_t new_thread = 0;
+                    pthread_create(&new_thread, 0, (Thread_Function*)receive_chunk, &threads_storage.back());
+                }
+            }
+
+            close(this_socket);
+        }
+    }
+    return 0;
 }
 
 int main(int argc, char** argv) {
     assert(argc >= 2);
 
     Data data = {};
-    data.id = atoi(argv[1]);
+    data.this_node.id = atoi(argv[1]);
 
-    vector<vector<int>> topology = read_topology();
-    vector<Config> configs = read_config();
-
-    data.neighbors = topology[data.id];
-    data.configs = configs;
-
+    set_nodes(&data, data.this_node.id);
     read_and_set_metadata(&data);
 
-    bool receive;
-    {
-        cout << "Voce quer requisitar arquivo? [s/n]: ";
-
-        char answer;
-        cin >> answer;
-
-        answer = tolower(answer);
-
-        assert(answer == 's' || answer == 'n');
-        receive = (answer == 's');
+    init_threads: {
+        pthread_create(&data.request_file_thread, 0, (Thread_Function*)request_file, &data);
+        pthread_create(&data.retransmit_request_thread, 0, (Thread_Function*)retransmit_request, &data);
     }
-    
-    if (receive) {
-        peer_to_peer_request_file(&data);
-    } else {
-        peer_to_peer_respond_file(&data);
-    }
+
+    pthread_join(data.request_file_thread, 0);
+    pthread_join(data.retransmit_request_thread, 0);
+
+    return 0;
 }
 
