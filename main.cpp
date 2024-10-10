@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <string.h>
 
 #include <iostream>
 #include <sstream>
@@ -18,6 +19,8 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 using std::vector;
 using std::stringstream;
@@ -203,7 +206,7 @@ void read_and_set_metadata(Data* data) {
 struct Discovery_Request_Package {
     string file;
     int ttl;
-    int last_id;  // NOTE(felipe): used to not retransmit to the receiver
+    int last_id;  // NOTE(felipe): used to not retransmit to the sender
 };
 
 constexpr int discovery_request_max_size = 4096;
@@ -299,10 +302,10 @@ string serialize_discovery_response_package(Discovery_Response_Package* package)
     s += package->ip;
     s += '\n';
 
-    s += package->port;
+    s += to_string(package->port);
     s += '\n';
 
-    s += package->chunk;
+    s += to_string(package->chunk);
     s += '\n';
 
     return s;
@@ -512,7 +515,48 @@ void* retransmit_request(Data* data) {
         close(this_socket); 
     }
 
-    response_package: {
+    respond_package: {
+        int this_socket = udp_create_socket();
+
+        {
+            char const* file_name = received_package.file.c_str();
+            int file_name_size = received_package.file.size();
+
+            DIR* directory = opendir(".");
+            assert(directory);
+
+            dirent* entry;
+            while (true) {
+                entry = readdir(directory);
+                if (!entry) {
+                    break;
+                }
+
+                char const* curr_file = entry->d_name;
+
+                char const* chunk_suffix = ".ch";
+                int chunk_suffix_size = strlen(chunk_suffix);
+
+                bool starts_with_file_name = strncmp(curr_file, file_name, file_name_size) == 0;
+                bool ends_with_chunk_suffix = strncmp(curr_file + file_name_size, chunk_suffix, chunk_suffix_size) == 0;
+
+                if (starts_with_file_name && ends_with_chunk_suffix) {
+                    int chunk = atoi(curr_file + file_name_size + chunk_suffix_size);
+                    Discovery_Response_Package response = {data->this_node.ip, data->this_node.port, chunk};
+
+                    string serialized_response = serialize_discovery_response_package(&response);
+
+                    for (Node& neighbor : data->neighbors) {
+                        int neighbor_ip = inet_addr(neighbor.ip.c_str());
+                        uint16_t neighbor_port = neighbor.port;
+                        udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
+                    }
+                }
+            }
+            closedir(directory);
+        }
+
+        close(this_socket);
     }
 
     return 0;
