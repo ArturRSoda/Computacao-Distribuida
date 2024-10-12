@@ -13,28 +13,67 @@
 #include <fstream>
 #include <string>
 #include <tuple>
+#include <queue>
 
 #include <unistd.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <sys/types.h>
 #include <dirent.h>
 
-using std::vector;
-using std::stringstream;
-using std::ifstream;
-using std::string;
-using std::to_string;
-using std::cout;
-using std::cin;
-using std::list;
-using std::move;
-using std::tuple;
-using std::get;
+using namespace std;
 
 using Thread_Function = void*(void*);
+
+enum Discovery_Type {
+    type_request,
+    type_response
+};
+
+struct Header {
+    int type;
+    int ttl;
+    int last_id;  // NOTE(felipe): used to not retransmit to the sender
+};
+
+struct Discovery_Request_Packet {
+    Header header;
+    string file;
+};
+
+constexpr int discovery_request_max_size = 4096;
+
+struct Discovery_Response_Packet {
+    Header header;
+    string ip;
+    uint16_t port;
+    int chunk;
+};
+
+constexpr int discovery_response_packet_max_size = 4096;
+
+void print(Header* header) {
+    cout << "Type: " << header->type << endl;
+    cout << "TTL: " << header->ttl << endl;
+    cout << "Last id: " << header->last_id << endl;
+}
+
+void print(Discovery_Request_Packet* packet) {
+    print(&packet->header);
+    cout << "File: " << packet->file << endl;
+    cout << endl;
+}
+
+void print(Discovery_Response_Packet* packet) {
+    print(&packet->header);
+    cout << "IP: " << packet->ip << endl;
+    cout << "Port: " << packet->port << endl;
+    cout << "Chunk: " << packet->chunk << endl;
+    cout << endl;
+}
 
 struct Node {
     int id;
@@ -52,10 +91,23 @@ struct Data {
     int chunk_count;
     int ttl;
 
+    pthread_t receive_udp_packets_thread;
     pthread_t request_file_thread;
-    pthread_t retransmit_request_thread;
+    pthread_t respond_discovery_thread;
     vector<pthread_t> send_chunk_threads;
     vector<pthread_t> receive_chunk_threads;
+
+    Discovery_Request_Packet last_request;
+    pthread_mutex_t last_request_lock;
+
+    Discovery_Response_Packet last_response;
+    pthread_mutex_t last_response_lock;
+
+    bool request_file = false;
+    pthread_mutex_t request_file_lock;
+
+    sem_t notify_request_arrived;
+    sem_t notify_response_arrived;
 };
 
 struct Chunk {
@@ -203,20 +255,10 @@ void read_and_set_metadata(Data* data) {
     file >> data->ttl;
 }
 
-struct Discovery_Request_Package {
-    string file;
-    int ttl;
-    int last_id;  // NOTE(felipe): used to not retransmit to the sender
-};
-
-constexpr int discovery_request_max_size = 4096;
-
-Discovery_Request_Package unserialize_discovery_request_package(string* serialized) {
+Discovery_Request_Packet unserialize_discovery_request_packet(string* serialized) {
     stringstream all_lines(*serialized);
 
     string file;
-    int ttl;
-    int id;
     {
         string s;
         getline(all_lines, s);
@@ -224,48 +266,29 @@ Discovery_Request_Package unserialize_discovery_request_package(string* serializ
 
         line >> file;
     }
-    {
-        string s;
-        getline(all_lines, s);
-        stringstream line(s);
-        
-        line >> ttl;
-    }
-    {
-        string s;
-        getline(all_lines, s);
-        stringstream line(s);
-        
-        line >> id;
-    }
 
-    return Discovery_Request_Package{file, ttl, id};
+    return Discovery_Request_Packet{Header{}, file};
 }
 
-string serialize_discovery_request_package(Discovery_Request_Package* package) {
+string serialize_discovery_request_packet(Discovery_Request_Packet* packet) {
     string s;
 
-    s += package->file;
+    s += to_string(packet->header.type);
     s += '\n';
 
-    s += to_string(package->ttl);
+    s += to_string(packet->header.ttl);
     s += '\n';
 
-    s += to_string(package->last_id);
+    s += to_string(packet->header.last_id);
+    s += '\n';
+
+    s += packet->file;
     s += '\n';
 
     return s;
 }
 
-struct Discovery_Response_Package {
-    string ip;
-    uint16_t port;
-    int chunk;
-};
-
-constexpr int discovery_response_package_max_size = 4096;
-
-Discovery_Response_Package unserialize_discovery_response_package(string* serialized) {
+Discovery_Response_Packet unserialize_discovery_response_packet(string* serialized) {
     stringstream all_lines(*serialized);
 
     string ip;
@@ -293,19 +316,28 @@ Discovery_Response_Package unserialize_discovery_response_package(string* serial
         line >> chunk;
     }
 
-    return Discovery_Response_Package{ip, port, chunk};
+    return Discovery_Response_Packet{Header{}, ip, port, chunk};
 }
 
-string serialize_discovery_response_package(Discovery_Response_Package* package) {
+string serialize_discovery_response_packet(Discovery_Response_Packet* packet) {
     string s;
 
-    s += package->ip;
+    s += to_string(packet->header.type);
     s += '\n';
 
-    s += to_string(package->port);
+    s += to_string(packet->header.ttl);
     s += '\n';
 
-    s += to_string(package->chunk);
+    s += to_string(packet->header.last_id);
+    s += '\n';
+
+    s += packet->ip;
+    s += '\n';
+
+    s += to_string(packet->port);
+    s += '\n';
+
+    s += to_string(packet->chunk);
     s += '\n';
 
     return s;
@@ -458,14 +490,14 @@ void* send_chunk(void*) {
     return 0;
 }
 
-void* receive_chunk(tuple<Discovery_Response_Package, Chunk>* tuple_arg) {
-    Discovery_Response_Package* package = &get<0>(*tuple_arg);
+void* receive_chunk(tuple<Discovery_Response_Packet, Chunk>* tuple_arg) {
+    Discovery_Response_Packet* packet = &get<0>(*tuple_arg);
     Chunk* chunk = &get<1>(*tuple_arg);
 
     int this_socket = tcp_create_socket();
 
-    int server_ip = inet_addr(package->ip.c_str());
-    uint16_t server_port = package->port;
+    int server_ip = inet_addr(packet->ip.c_str());
+    uint16_t server_port = packet->port;
     tcp_connect(this_socket, server_ip, server_port);
 
     close(this_socket);
@@ -473,90 +505,203 @@ void* receive_chunk(tuple<Discovery_Response_Package, Chunk>* tuple_arg) {
     return 0;
 }
 
-void* retransmit_request(Data* data) {
-    Discovery_Request_Package received_package;
-    receive_package: {
-        int this_socket = udp_create_socket();
+void* receive_udp_packets(Data* data) {
+    int this_socket = udp_create_socket();
 
-        int ip = INADDR_ANY;
-        uint16_t port = data->this_node.port;
-        udp_bind(this_socket, ip, port);
+    int ip = INADDR_ANY;
+    uint16_t port = data->this_node.port;
+    udp_bind(this_socket, ip, port);
 
+    while (true) {
         string s = udp_receive(this_socket, discovery_request_max_size);
 
-        received_package = unserialize_discovery_request_package(&s);
+        stringstream ss(s);
 
-        close(this_socket); 
-    }
+        Header header = {};
+        {
+            {
+                string s;
+                getline(ss, s);
+                stringstream line(s);
 
-    sleep(1);
+                line >> header.type;
+            }
+            {
+                string s;
+                getline(ss, s);
+                stringstream line(s);
 
-    retransmit_package: {
-        int this_socket = udp_create_socket();
+                line >> header.ttl;
+            }
+            {
+                string s;
+                getline(ss, s);
+                stringstream line(s);
 
-        Discovery_Request_Package to_send_package = received_package;
-        to_send_package.ttl--;
-        to_send_package.last_id = data->this_node.id;
-
-        if (to_send_package.ttl > 0) {
-            string serialized_package = serialize_discovery_request_package(&to_send_package);
-
-            for (Node& neighbor : data->neighbors) {
-                if (neighbor.id == received_package.last_id) {
-                    continue;
-                }
-
-                int neighbor_ip = inet_addr(neighbor.ip.c_str());
-                uint16_t neighbor_port = neighbor.port;
-                udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_package);
+                line >> header.last_id;
             }
         }
 
-        close(this_socket); 
-    }
+        string s_rest;
+        while (true) {
+            char c = ss.get();
+            if (!ss) break;
+            s_rest += c;
+        }
 
-    respond_package: {
-        int this_socket = udp_create_socket();
+        Header new_header = {
+            header.type,
+            header.ttl - 1,
+            data->this_node.id
+        };
 
-        {
-            char const* file_name = received_package.file.c_str();
-            int file_name_size = received_package.file.size();
+        if (header.type == type_request) {
+            Discovery_Request_Packet request = unserialize_discovery_request_packet(&s_rest);
+            request.header = header;
 
-            DIR* directory = opendir(".");
-            assert(directory);
+            cout << "UDP packets from " << header.last_id << " " << endl;
+            print(&request);
 
-            dirent* entry;
-            while (true) {
-                entry = readdir(directory);
-                if (!entry) {
-                    break;
-                }
+            pthread_mutex_lock(&data->last_request_lock);
+            data->last_request = request;
+            pthread_mutex_unlock(&data->last_request_lock);
 
-                char const* curr_file = entry->d_name;
+            sem_post(&data->notify_request_arrived);
 
-                char const* chunk_suffix = ".ch";
-                int chunk_suffix_size = strlen(chunk_suffix);
+            retransmit_request_packet: {
+                Discovery_Request_Packet to_send_packet = request;
+                to_send_packet.header = new_header;
 
-                bool starts_with_file_name = strncmp(curr_file, file_name, file_name_size) == 0;
-                bool ends_with_chunk_suffix = strncmp(curr_file + file_name_size, chunk_suffix, chunk_suffix_size) == 0;
-
-                if (starts_with_file_name && ends_with_chunk_suffix) {
-                    int chunk = atoi(curr_file + file_name_size + chunk_suffix_size);
-                    Discovery_Response_Package response = {data->this_node.ip, data->this_node.port, chunk};
-
-                    string serialized_response = serialize_discovery_response_package(&response);
+                if (to_send_packet.header.ttl >= 0) {
+                    string serialized_packet = serialize_discovery_request_packet(&to_send_packet);
 
                     for (Node& neighbor : data->neighbors) {
+                        if (neighbor.id == header.last_id) {
+                            continue;
+                        }
+
                         int neighbor_ip = inet_addr(neighbor.ip.c_str());
                         uint16_t neighbor_port = neighbor.port;
-                        udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
+                        udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_packet);
+
+                        cout << "Retransmiting to " << neighbor.id << " " << endl;
+                        print(&to_send_packet);
                     }
                 }
             }
-            closedir(directory);
+        } else if (header.type == type_response) {
+            Discovery_Response_Packet response = unserialize_discovery_response_packet(&s_rest);
+            response.header = header;
+
+            cout << "UDP packets from " << header.last_id << " " << endl;
+            print(&response);
+
+            pthread_mutex_lock(&data->last_response_lock);
+            data->last_response = response;
+            pthread_mutex_unlock(&data->last_response_lock);
+
+            pthread_mutex_lock(&data->request_file_lock);
+            if (data->request_file) {
+                sem_post(&data->notify_response_arrived);
+            }
+            pthread_mutex_unlock(&data->request_file_lock);
+
+            retransmit_response_packet: {
+                Discovery_Response_Packet to_send_packet = response;
+                to_send_packet.header = new_header;
+
+                if (to_send_packet.header.ttl >= 0) {
+                    string serialized_packet = serialize_discovery_response_packet(&to_send_packet);
+
+                    for (Node& neighbor : data->neighbors) {
+                        if (neighbor.id == header.last_id) {
+                            continue;
+                        }
+
+                        int neighbor_ip = inet_addr(neighbor.ip.c_str());
+                        uint16_t neighbor_port = neighbor.port;
+                        udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_packet);
+
+                        cout << "Retransmiting to " << neighbor.id << " " << endl;
+                        print(&to_send_packet);
+                    }
+                }
+
+            }
+        }
+    }
+
+    close(this_socket); 
+
+    return 0;
+}
+
+void* respond_discovery(Data* data) {
+    while (true) {
+        Discovery_Request_Packet received_packet;
+        receive_packet: {
+            sem_wait(&data->notify_request_arrived);
+
+            pthread_mutex_lock(&data->last_request_lock);
+            received_packet = data->last_request;
+            pthread_mutex_unlock(&data->last_request_lock);
         }
 
-        close(this_socket);
+        sleep(1);
+
+        respond_packet: {
+            int this_socket = udp_create_socket();
+
+            {
+                char const* file_name = received_packet.file.c_str();
+                int file_name_size = received_packet.file.size();
+
+                DIR* directory = opendir(".");
+                assert(directory);
+
+                dirent* entry;
+                while (true) {
+                    entry = readdir(directory);
+                    if (!entry) {
+                        break;
+                    }
+
+                    char const* curr_file = entry->d_name;
+
+                    char const* chunk_suffix = ".ch";
+                    int chunk_suffix_size = strlen(chunk_suffix);
+
+                    bool starts_with_file_name = strncmp(curr_file, file_name, file_name_size) == 0;
+                    bool ends_with_chunk_suffix = strncmp(curr_file + file_name_size, chunk_suffix, chunk_suffix_size) == 0;
+
+                    if (starts_with_file_name && ends_with_chunk_suffix) {
+                        int chunk = atoi(curr_file + file_name_size + chunk_suffix_size);
+                        Discovery_Response_Packet response = {
+                            Header{
+                                type_response,
+                                data->ttl - 1,
+                                data->this_node.id
+                            },
+                            data->this_node.ip, data->this_node.port, chunk
+                        };
+
+                        string serialized_response = serialize_discovery_response_packet(&response);
+
+                        for (Node& neighbor : data->neighbors) {
+                            int neighbor_ip = inet_addr(neighbor.ip.c_str());
+                            uint16_t neighbor_port = neighbor.port;
+                            udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
+
+                            cout << "Responding to " << neighbor.id << endl;
+                            print(&response);
+                        }
+                    }
+                }
+                closedir(directory);
+            }
+
+            close(this_socket);
+        }
     }
 
     return 0;
@@ -582,56 +727,65 @@ void* request_file(Data* data) {
         }
 
         request_chunks: {
-            Discovery_Request_Package package = {
+            Discovery_Request_Packet packet = {
+                Header {
+                    type_request,
+                    data->ttl - 1,
+                    data->this_node.id
+                },
                 data->metadata_file_name,
-                data->ttl,
-                data->this_node.id
             };
-            package.ttl--;
 
-            string serialized_package = serialize_discovery_request_package(&package);
+            string serialized_packet = serialize_discovery_request_packet(&packet);
 
             int this_socket = udp_create_socket();
 
             for (Node& neighbor : data->neighbors) {
                 int ip = inet_addr(neighbor.ip.c_str());
                 uint16_t port = neighbor.port;
-                udp_send(this_socket, ip, port, &serialized_package);
+                udp_send(this_socket, ip, port, &serialized_packet);
+
+                cout << "Requesting to " << neighbor.id << endl;
+                print(&packet);
             }
 
             close(this_socket);
         }
+
+        pthread_mutex_lock(&data->request_file_lock);
+        data->request_file = true;
+        pthread_mutex_unlock(&data->request_file_lock);
 
         usleep(1'000);
 
-        create_threads_to_receive_chunks: {
-            int this_socket = udp_create_socket();
-            udp_bind(this_socket, INADDR_ANY, data->this_node.port);
+        //create_threads_to_receive_chunks: {
+        //    list<tuple<Discovery_Response_Packet, Chunk>> threads_storage;
+        //        
+        //    int chunk_count = 0;
+        //    vector<bool> seen_chunks(data->chunk_count, false);
+        //    while (chunk_count < data->chunk_count) {
+        //        sem_wait(&data->notify_response_arrived);
 
-            list<tuple<Discovery_Response_Package, Chunk>> threads_storage;
-                
-            int chunk_count = 0;
-            vector<bool> seen_chunks(data->chunk_count, false);
-            while (chunk_count < data->chunk_count) {
-                in_addr_t ip = 0;
-                in_port_t port = 0;
-                string serialized_package = udp_receive(this_socket, discovery_response_package_max_size, &ip, &port);
+        //        pthread_mutex_lock(&data->last_response_lock);
+        //        Discovery_Response_Packet temp_packet = data->last_response;
+        //        pthread_mutex_unlock(&data->last_response_lock);
 
-                Discovery_Response_Package temp_package = unserialize_discovery_response_package(&serialized_package);
+        //        if (!seen_chunks[temp_packet.chunk]) {
+        //            seen_chunks[temp_packet.chunk] = true;
 
-                if (!seen_chunks[temp_package.chunk]) {
-                    seen_chunks[temp_package.chunk] = true;
+        //            threads_storage.push_back({std::move(temp_packet), Chunk{}});
 
-                    threads_storage.push_back({std::move(temp_package), Chunk{}});
+        //            pthread_t new_thread = 0;
+        //            pthread_create(&new_thread, 0, (Thread_Function*)receive_chunk, &threads_storage.back());
+        //        }
+        //    }
+        //}
 
-                    pthread_t new_thread = 0;
-                    pthread_create(&new_thread, 0, (Thread_Function*)receive_chunk, &threads_storage.back());
-                }
-            }
-
-            close(this_socket);
-        }
+        pthread_mutex_lock(&data->request_file_lock);
+        data->request_file = false;
+        pthread_mutex_unlock(&data->request_file_lock);
     }
+
     return 0;
 }
 
@@ -644,13 +798,33 @@ int main(int argc, char** argv) {
     set_nodes(&data, data.this_node.id);
     read_and_set_metadata(&data);
 
-    init_threads: {
+    init: {
+        pthread_create(&data.receive_udp_packets_thread, 0, (Thread_Function*)receive_udp_packets, &data);
         pthread_create(&data.request_file_thread, 0, (Thread_Function*)request_file, &data);
-        pthread_create(&data.retransmit_request_thread, 0, (Thread_Function*)retransmit_request, &data);
+        pthread_create(&data.respond_discovery_thread, 0, (Thread_Function*)respond_discovery, &data);
+
+        pthread_mutex_init(&data.last_request_lock, 0);
+        pthread_mutex_init(&data.last_response_lock, 0);
+
+        pthread_mutex_init(&data.request_file_lock, 0);
+
+        sem_init(&data.notify_request_arrived, 0, 0);
+        sem_init(&data.notify_response_arrived, 0, 0);
     }
 
+    pthread_join(data.receive_udp_packets_thread, 0);
     pthread_join(data.request_file_thread, 0);
-    pthread_join(data.retransmit_request_thread, 0);
+    pthread_join(data.respond_discovery_thread, 0);
+
+    destroy: {
+        pthread_mutex_destroy(&data.last_request_lock);
+        pthread_mutex_destroy(&data.last_response_lock);
+
+        pthread_mutex_destroy(&data.request_file_lock);
+
+        sem_destroy(&data.notify_request_arrived);
+        sem_destroy(&data.notify_response_arrived);
+    }
 
     return 0;
 }

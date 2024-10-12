@@ -1,13 +1,26 @@
-Notas {
+Problemas {
+    Porta TCP {
+        1 -> 11000 - 11999
+        2 -> 12000 - 12999
+    }
+
     Limitar taxa de envio para todos os TCP
     Adicionar tempo de reenvio
+
+    Escolher melhor conexao
+
+    Tempo de espera de retransmissao esta bloqueando thread de leitura. Criar thread so para retransmissao? {
+        No minimo espera um segundo (mas pode ser bem mais)
+        No maximo espera um segundo (mas pode ser bem menos)
+    }
 }
 
 Threads (T) {
-    1: ler input aa espera de requisicao, enviar discovery request packet (UDP), receber discovery response packet (UDP)
-    2: receber e retransmitir discovery request packets, enviar discovery response packets (UDP)
-    3...: abrir conexao, enviar chunks (TCP)
-    4...: conectar-se, receber chunks (TCP)
+    0: receber pacotes UDP e retransmitir. Baseado no header, enviar para thread 1 ou 2
+    1: ler input na espera de requisicao, enviar request packet (UDP), receber response packet da thread 0 (UDP), criar thread 3
+    2: receber response packet (da thread 0), possivelmente criar thread 4
+    3...: conectar-se, receber chunks (TCP)
+    4...: abrir conexao, enviar chunks (TCP) (com timeout)
 }
 
 Multiplos chunks sao enviados em multiplas conexoes TCP
