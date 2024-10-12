@@ -5,25 +5,59 @@ Problemas {
     }
 
     Limitar taxa de envio para todos os TCP
-    Adicionar tempo de reenvio
 
-    Escolher melhor conexao
+    Tempo de espera nao esta cem por cento perfeito (1 segundo de erro)
 
-    Tempo de espera de retransmissao esta bloqueando thread de leitura. Criar thread so para retransmissao? {
-        No minimo espera um segundo (mas pode ser bem mais)
-        No maximo espera um segundo (mas pode ser bem menos)
+    Response deve retornar tambem taxa de transmissao
+
+    Ideia {
+        TTL do Discovery_Reponse_Packet atribuido com TTL do Discovery_Request_Package
+        Timeout da espera do response eh igual ao TTL (mais alguns poucos segundos)
+        Depois de receber todos os pacotes, fica facil escolher o melhor chunk
     }
+
+    Ideia {
+        Uma thread por chunk
+        Porque um nodo pode ser o mais rapido para o chunk0 mas nao para o chunk1
+    }
+
+    Ideia de send_chunk {
+        Uma thread, a cada segundo, fazer "bytes_available_to_send = transmission_rate"
+        As threads send_chunk vao dar lock e decrementar essa variavel dependendo do quanto usou
+    }
+
+    O p2p eh lido logo no inicio do programa. Ele deveria ser fornecido pelo usuario em tempo de execucao
 }
 
 Threads (T) {
-    0: receber pacotes UDP e retransmitir. Baseado no header, enviar para thread 1 ou 2
-    1: ler input na espera de requisicao, enviar request packet (UDP), receber response packet da thread 0 (UDP), criar thread 3
-    2: receber response packet (da thread 0), possivelmente criar thread 4
-    3...: conectar-se, receber chunks (TCP)
-    4...: abrir conexao, enviar chunks (TCP) (com timeout)
+    receive_udp_packets {
+        Recebe pacotes UDP
+        Armazena na fila de pacotes a serem retransmitidos por retransmit_udp_packets
+        Baseado no header, enviar para thread request_file ou respond_discovery
+    }
+    retransmit_udp_packets {
+        Espera um segundo para retransmitir pacotes recebidos por receive_udp_packets
+    }
+    request_file {
+        Le input na espera de requisicao
+        Envia request packet (UDP)
+        Recebe response packet da thread receive_udp_packets (UDP)
+        Escolhe com quem conectar (talvez espere para chegar a maioria dos pacotes)
+        Cria multiplas threads receive_chunk
+    }
+    respond_discovery {
+        Recebe request packet (da thread receive_udp_packets)
+        Cria thread send_chunk para cada chunk
+    }
+    receive_chunk (multiplas) {
+        Conecta a outro_processo:send_chunk (TCP)
+        Recebe chunk (TCP)
+    }
+    send_chunk (multiplas) {
+        Abre conexao (com timeout)
+        Envia chunk (TCP)
+    }
 }
-
-Multiplos chunks sao enviados em multiplas conexoes TCP
 
 UDP (bloqueante vs. nao bloqueante) {
     Conexao:     sem            | sem
