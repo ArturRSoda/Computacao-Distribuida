@@ -82,15 +82,19 @@ struct Node {
     uint16_t port;
 };
 
+struct File {
+    string metadata_file_name;
+    int chunk_count;
+    int ttl;
+};
+
 struct Data {
     Node this_node;
     int transmission_rate;
 
     vector<Node> neighbors;
 
-    string metadata_file_name;
-    int chunk_count;
-    int ttl;
+    File file;
 
     pthread_t receive_udp_packets_thread;
     pthread_t retransmit_udp_packets_thread;
@@ -252,15 +256,6 @@ void set_nodes(Data* data, int this_id) {
     data->this_node.ip = configs[data->this_node.id].ip;
     data->this_node.port = configs[data->this_node.id].port;
     data->transmission_rate = configs[data->this_node.id].transmission_rate;
-}
-
-void read_and_set_metadata(Data* data) {
-    ifstream file("../arquivo.p2p");
-    assert(file.is_open());
-
-    file >> data->metadata_file_name;
-    file >> data->chunk_count;
-    file >> data->ttl;
 }
 
 Discovery_Request_Packet unserialize_discovery_request_packet(string* serialized) {
@@ -500,7 +495,7 @@ void* send_chunk(void*) {
 
 void* receive_chunk(tuple<Discovery_Response_Packet, Chunk>* tuple_arg) {
     Discovery_Response_Packet* packet = &get<0>(*tuple_arg);
-    Chunk* chunk = &get<1>(*tuple_arg);
+    //Chunk* chunk = &get<1>(*tuple_arg);
 
     int this_socket = tcp_create_socket();
 
@@ -717,7 +712,7 @@ void* respond_discovery(Data* data) {
                         Discovery_Response_Packet response = {
                             Header{
                                 type_response,
-                                data->ttl - 1,
+                                received_packet.header.ttl - 1,
                                 data->this_node.id
                             },
                             data->this_node.ip, data->this_node.port, chunk
@@ -748,30 +743,36 @@ void* respond_discovery(Data* data) {
 void* request_file(Data* data) {
     while (true) {
         ask: while (true) {
-            cout << "Voce quer requisitar arquivo? [s/n]: ";
+            cout << "Digite o arquivo a ser requisitado: ";
 
-            char answer = 0;
-            cin >> answer;
+            string file_name;
+            cin >> file_name;
 
-            answer = tolower(answer);
+            ifstream file_info_stream(file_name);
 
-            if (answer != 's' && answer != 'n') {
-                cout << "Entrada invalida\n";
+            if (!file_info_stream.is_open()) {
+                cout << "Nao foi possivel abrir o arquivo" << endl;
+                continue;
             }
 
-            if (answer == 's') {
-                break;
-            }
+            File file_info;
+            file_info_stream >> file_info.metadata_file_name;
+            file_info_stream >> file_info.chunk_count;
+            file_info_stream >> file_info.ttl;
+
+            data->file = file_info;
+
+            break;
         }
 
         request_chunks: {
             Discovery_Request_Packet packet = {
                 Header {
                     type_request,
-                    data->ttl - 1,
+                    data->file.ttl - 1,
                     data->this_node.id
                 },
-                data->metadata_file_name,
+                data->file.metadata_file_name,
             };
 
             string serialized_packet = serialize_discovery_request_packet(&packet);
@@ -798,8 +799,8 @@ void* request_file(Data* data) {
             list<tuple<Discovery_Response_Packet, Chunk>> threads_storage;
                 
             int chunk_count = 0;
-            vector<bool> seen_chunks(data->chunk_count, false);
-            while (chunk_count < data->chunk_count) {
+            vector<bool> seen_chunks(data->file.chunk_count, false);
+            while (chunk_count < data->file.chunk_count) {
                 sem_wait(&data->notify_response_arrived);
 
                 pthread_mutex_lock(&data->last_response_lock);
@@ -832,7 +833,6 @@ int main(int argc, char** argv) {
     data.this_node.id = atoi(argv[1]);
 
     set_nodes(&data, data.this_node.id);
-    read_and_set_metadata(&data);
 
     init: {
         pthread_create(&data.receive_udp_packets_thread, 0, (Thread_Function*)receive_udp_packets, &data);
