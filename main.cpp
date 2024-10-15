@@ -15,6 +15,7 @@
 #include <string>
 #include <tuple>
 #include <queue>
+#include <iomanip>
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -57,7 +58,12 @@ struct Discovery_Response_Packet {
 constexpr int discovery_response_packet_max_size = 4096;
 
 void print(Header* header) {
-    cout << "Type: " << header->type << endl;
+    cout << "Type: ";
+    if (header->type == type_request) {
+        cout << "request" << endl;
+    } else if (header->type == type_response) {
+        cout << "response" << endl;
+    }
     cout << "TTL: " << header->ttl << endl;
     cout << "Last id: " << header->last_id << endl;
 }
@@ -104,8 +110,8 @@ struct Data {
     vector<pthread_t> receive_chunk_threads;
 
     // NOTE(felipe): packet, time of receive, last_id
-    queue<tuple<Discovery_Request_Packet, time_t, int>> requests_to_retransmit;
-    queue<tuple<Discovery_Response_Packet, time_t, int>> responses_to_retransmit;
+    queue<tuple<Discovery_Request_Packet, timespec, int>> requests_to_retransmit;
+    queue<tuple<Discovery_Response_Packet, timespec, int>> responses_to_retransmit;
 
     pthread_mutex_t retransmit_queues_lock;
 
@@ -508,6 +514,19 @@ void* receive_chunk(tuple<Discovery_Response_Packet, Chunk>* tuple_arg) {
     return 0;
 }
 
+timespec my_get_time() {
+    timespec curr_time;
+    timespec_get(&curr_time, TIME_UTC);
+    return curr_time;
+}
+
+ostream& operator<<(ostream& os, timespec ts) {
+    int precision = 2;
+    double time = (double)(ts.tv_sec % 1000) + ((double)ts.tv_nsec / 1000000000 / precision);
+    os << "[" << fixed << setprecision(precision) << time << "]: ";
+    return os;
+}
+
 void* receive_udp_packets(Data* data) {
     int this_socket = udp_create_socket();
 
@@ -562,7 +581,7 @@ void* receive_udp_packets(Data* data) {
             Discovery_Request_Packet request = unserialize_discovery_request_packet(&s_rest);
             request.header = header;
 
-            cout << "UDP packets from " << header.last_id << " " << endl;
+            cout << my_get_time() << "UDP packets from " << header.last_id << " " << endl;
             print(&request);
 
             pthread_mutex_lock(&data->last_request_lock);
@@ -574,13 +593,14 @@ void* receive_udp_packets(Data* data) {
             pthread_mutex_lock(&data->retransmit_queues_lock);
             Discovery_Request_Packet to_send_packet = request;
             to_send_packet.header = new_header;
-            data->requests_to_retransmit.push({to_send_packet, time(0), header.last_id});
+            timespec curr_time = my_get_time();
+            data->requests_to_retransmit.push({to_send_packet, curr_time, header.last_id});
             pthread_mutex_unlock(&data->retransmit_queues_lock);
         } else if (header.type == type_response) {
             Discovery_Response_Packet response = unserialize_discovery_response_packet(&s_rest);
             response.header = header;
 
-            cout << "UDP packets from " << header.last_id << " " << endl;
+            cout << my_get_time() << "UDP packets from " << header.last_id << " " << endl;
             print(&response);
 
             pthread_mutex_lock(&data->last_response_lock);
@@ -596,7 +616,8 @@ void* receive_udp_packets(Data* data) {
             pthread_mutex_lock(&data->retransmit_queues_lock);
             Discovery_Response_Packet to_send_packet = response;
             to_send_packet.header = new_header;
-            data->responses_to_retransmit.push({to_send_packet, time(0), header.last_id});
+            timespec curr_time = my_get_time();
+            data->responses_to_retransmit.push({to_send_packet, curr_time, header.last_id});
             pthread_mutex_unlock(&data->retransmit_queues_lock);
         }
     }
@@ -612,10 +633,18 @@ void* retransmit_udp_packets(Data* data) {
 
         int this_socket = udp_create_socket();
 
-        time_t curr_time = time(0);
+        timespec curr_time = my_get_time();
+
+        double sec_to_milli = 1000.0;
+        double nsec_to_milli = 1.0/1000000.0;
+
         if (data->requests_to_retransmit.size()) {
             auto request_tup = data->requests_to_retransmit.front();
-            if (curr_time - get<1>(request_tup) > 1) {
+
+            timespec last_time = my_get_time();
+            double diff_milli = sec_to_milli * (curr_time.tv_sec - last_time.tv_sec) + nsec_to_milli * (curr_time.tv_nsec - last_time.tv_nsec);
+
+            if (diff_milli > 1000) {
                 data->requests_to_retransmit.pop();
 
                 Discovery_Request_Packet to_send_packet = get<0>(request_tup);
@@ -631,7 +660,7 @@ void* retransmit_udp_packets(Data* data) {
                         uint16_t neighbor_port = neighbor.port;
                         udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_packet);
 
-                        cout << "Retransmiting to " << neighbor.id << " at " << curr_time << endl;
+                        cout << curr_time << "Retransmiting to " << neighbor.id << endl;
                         print(&to_send_packet);
                     }
                 }
@@ -640,7 +669,11 @@ void* retransmit_udp_packets(Data* data) {
 
         if (data->responses_to_retransmit.size()) {
             auto response_tup = data->responses_to_retransmit.front();
-            if (curr_time - get<1>(response_tup) > 1) {
+
+            timespec last_time = get<1>(response_tup);
+            double diff_milli = sec_to_milli * (curr_time.tv_sec - last_time.tv_sec) + nsec_to_milli * (curr_time.tv_nsec - last_time.tv_nsec);
+
+            if (diff_milli > 1000) {
                 data->responses_to_retransmit.pop();
 
                 Discovery_Response_Packet to_send_packet = get<0>(response_tup);
@@ -656,7 +689,7 @@ void* retransmit_udp_packets(Data* data) {
                         uint16_t neighbor_port = neighbor.port;
                         udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_packet);
 
-                        cout << "Retransmiting to " << neighbor.id << " at " << curr_time << endl;
+                        cout << curr_time << "Retransmiting to " << neighbor.id << endl;
                         print(&to_send_packet);
                     }
                 }
@@ -725,7 +758,7 @@ void* respond_discovery(Data* data) {
                             uint16_t neighbor_port = neighbor.port;
                             udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
 
-                            cout << "Responding to " << neighbor.id << endl;
+                            cout << my_get_time() << "Responding to " << neighbor.id << endl;
                             print(&response);
                         }
                     }
@@ -784,7 +817,7 @@ void* request_file(Data* data) {
                 uint16_t port = neighbor.port;
                 udp_send(this_socket, ip, port, &serialized_packet);
 
-                cout << "Requesting to " << neighbor.id << endl;
+                cout << my_get_time() << "Requesting to " << neighbor.id << endl;
                 print(&packet);
             }
 
@@ -795,28 +828,28 @@ void* request_file(Data* data) {
         data->request_file = true;
         pthread_mutex_unlock(&data->request_file_lock);
 
-        create_threads_to_receive_chunks: {
-            list<tuple<Discovery_Response_Packet, Chunk>> threads_storage;
-                
-            int chunk_count = 0;
-            vector<bool> seen_chunks(data->file.chunk_count, false);
-            while (chunk_count < data->file.chunk_count) {
-                sem_wait(&data->notify_response_arrived);
+        //create_threads_to_receive_chunks: {
+        //    list<tuple<Discovery_Response_Packet, Chunk>> threads_storage;
+        //        
+        //    int chunk_count = 0;
+        //    vector<bool> seen_chunks(data->file.chunk_count, false);
+        //    while (chunk_count < data->file.chunk_count) {
+        //        sem_wait(&data->notify_response_arrived);
 
-                pthread_mutex_lock(&data->last_response_lock);
-                Discovery_Response_Packet temp_packet = data->last_response;
-                pthread_mutex_unlock(&data->last_response_lock);
+        //        pthread_mutex_lock(&data->last_response_lock);
+        //        Discovery_Response_Packet temp_packet = data->last_response;
+        //        pthread_mutex_unlock(&data->last_response_lock);
 
-                if (!seen_chunks[temp_packet.chunk]) {
-                    seen_chunks[temp_packet.chunk] = true;
+        //        if (!seen_chunks[temp_packet.chunk]) {
+        //            seen_chunks[temp_packet.chunk] = true;
 
-                    threads_storage.push_back({std::move(temp_packet), Chunk{}});
+        //            threads_storage.push_back({std::move(temp_packet), Chunk{}});
 
-                    pthread_t new_thread = 0;
-                    pthread_create(&new_thread, 0, (Thread_Function*)receive_chunk, &threads_storage.back());
-                }
-            }
-        }
+        //            pthread_t new_thread = 0;
+        //            pthread_create(&new_thread, 0, (Thread_Function*)receive_chunk, &threads_storage.back());
+        //        }
+        //    }
+        //}
 
         pthread_mutex_lock(&data->request_file_lock);
         data->request_file = false;
