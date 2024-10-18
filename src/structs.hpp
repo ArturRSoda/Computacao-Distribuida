@@ -59,7 +59,6 @@ struct Data {
     pthread_t respond_discovery_thread;
     pthread_t manage_bytes_to_send_thread;
     vector<pthread_t> send_chunk_threads;
-    vector<pthread_t> receive_chunk_threads;
 
     // NOTE(felipe): packet, time of receive, last_id
     queue<tuple<Discovery_Request_Packet, timespec, int>> requests_to_retransmit;
@@ -78,10 +77,5 @@ struct Data {
 
     sem_t notify_request_arrived;
     sem_t notify_response_arrived;
-};
-
-struct Chunk {
-    int chunk;
-    vector<char> data;
 };
 

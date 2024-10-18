@@ -118,7 +118,7 @@ void* send_chunk(void* void_arg) {
 
     close(client_socket);
 
-    cout << "Done sending chunk " << arg.chunk << endl;
+    cout << my_get_time() << "Done sending chunk " << arg.chunk << endl;
 
     return 0;
 }
@@ -641,6 +641,10 @@ int main(int argc, char** argv) {
     pthread_join(data.request_file_thread, 0);
     pthread_join(data.respond_discovery_thread, 0);
     pthread_join(data.manage_bytes_to_send_thread, 0);
+
+    for (pthread_t thread : data.send_chunk_threads) {
+        pthread_join(thread, 0);
+    }
 
     destroy: {
         sem_destroy(&data.new_send_timeframe);
