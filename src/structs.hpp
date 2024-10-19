@@ -53,6 +53,10 @@ struct Data {
     pthread_mutex_t bytes_to_send_in_timeframe_lock;
     // } TCP
 
+    bool receiving_chunks;
+    pthread_mutex_t receiving_chunks_lock;
+    vector<bool> chunks_being_received;
+
     pthread_t receive_udp_packets_thread;
     pthread_t retransmit_udp_packets_thread;
     pthread_t request_file_thread;

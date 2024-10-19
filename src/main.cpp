@@ -342,7 +342,7 @@ void* retransmit_udp_packets(void* void_arg) {
     }
 }
 
-vector<int> get_chunks(char const* file_name, int file_name_size) {
+vector<int> get_chunks(Data* data, char const* file_name, int file_name_size) {
     vector<int> chunks;
 
     DIR* directory = opendir(".");
@@ -365,7 +365,17 @@ vector<int> get_chunks(char const* file_name, int file_name_size) {
 
         if (starts_with_file_name && ends_with_chunk_suffix) {
             int chunk = atoi(curr_file + file_name_size + chunk_suffix_size);
-            chunks.push_back(chunk);
+
+            bool current_chunk_is_being_received = false;
+            pthread_mutex_lock(&data->receiving_chunks_lock);
+            if (data->receiving_chunks) {
+                current_chunk_is_being_received = data->chunks_being_received[chunk];
+            }
+            pthread_mutex_unlock(&data->receiving_chunks_lock);
+
+            if (!current_chunk_is_being_received) {
+                chunks.push_back(chunk);
+            }
         }
     }
     closedir(directory);
@@ -397,7 +407,7 @@ void* respond_discovery(void* arg) {
         char const* file_name = received_packet.file.c_str();
         int file_name_size = received_packet.file.size();
 
-        vector<int> chunks = get_chunks(file_name, file_name_size);
+        vector<int> chunks = get_chunks(data, file_name, file_name_size);
 
         uint16_t start_port = data->next_tcp_port;
 
@@ -441,18 +451,20 @@ void* respond_discovery(void* arg) {
                         data->this_node.ip, tcp_port, chunk
                     };
 
-                    string serialized_response = serialize_discovery_response_packet(&response);
+                    if (response.header.ttl >= 0) {
+                        string serialized_response = serialize_discovery_response_packet(&response);
 
-                    for (Node& neighbor : data->neighbors) {
-                        int neighbor_ip = inet_addr(neighbor.ip.c_str());
-                        uint16_t neighbor_port = neighbor.port;
-                        udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
+                        for (Node& neighbor : data->neighbors) {
+                            int neighbor_ip = inet_addr(neighbor.ip.c_str());
+                            uint16_t neighbor_port = neighbor.port;
+                            udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
 
-                        cout << my_get_time() << "Responding to " << neighbor.id << endl;
-                        print(&response);
+                            cout << my_get_time() << "Responding to " << neighbor.id << endl;
+                            print(&response);
+                        }
+
+                        close(this_socket);
                     }
-
-                    close(this_socket);
                 }
             }
         }
@@ -519,6 +531,11 @@ void* request_file(void* arg) {
         data->request_file = true;
         pthread_mutex_unlock(&data->request_file_lock);
 
+        pthread_mutex_lock(&data->receiving_chunks_lock);
+        data->receiving_chunks = true;
+        data->chunks_being_received.assign(data->file.chunk_count, false);
+        pthread_mutex_unlock(&data->receiving_chunks_lock);
+
         vector<pthread_t> receive_chunk_threads;
 
         create_threads_to_receive_chunks: {
@@ -528,7 +545,7 @@ void* request_file(void* arg) {
             char const* file_name = data->file.metadata_file_name.c_str();
             int file_name_size = data->file.metadata_file_name.size();
 
-            vector<int> chunks_already_in_folder = get_chunks(file_name, file_name_size);
+            vector<int> chunks_already_in_folder = get_chunks(data, file_name, file_name_size);
             for (int chunk : chunks_already_in_folder) {
                 if (!seen_chunks[chunk]) {
                     chunk_count++;
@@ -547,6 +564,10 @@ void* request_file(void* arg) {
                     seen_chunks[temp_packet.chunk] = true;
                     chunk_count++;
 
+                    pthread_mutex_lock(&data->receiving_chunks_lock);
+                    data->chunks_being_received[temp_packet.chunk] = true;
+                    pthread_mutex_unlock(&data->receiving_chunks_lock);
+
                     Receive_Chunk_Args* args = new Receive_Chunk_Args{
                         inet_addr(temp_packet.ip.c_str()),
                         temp_packet.port,
@@ -564,6 +585,10 @@ void* request_file(void* arg) {
         for (pthread_t thread : receive_chunk_threads) {
             pthread_join(thread, 0);
         }
+
+        pthread_mutex_lock(&data->receiving_chunks_lock);
+        data->receiving_chunks = false;
+        pthread_mutex_unlock(&data->receiving_chunks_lock);
 
         create_original_file: {
             ofstream original_file(data->file.metadata_file_name, ios::binary | ios::trunc);
@@ -619,6 +644,8 @@ int main(int argc, char** argv) {
         sem_init(&data.new_send_timeframe, 0, 0);
         pthread_mutex_init(&data.bytes_to_send_in_timeframe_lock, 0);
 
+        pthread_mutex_init(&data.receiving_chunks_lock, 0);
+
         pthread_mutex_init(&data.retransmit_queues_lock, 0);
 
         pthread_mutex_init(&data.last_request_lock, 0);
@@ -649,6 +676,8 @@ int main(int argc, char** argv) {
     destroy: {
         sem_destroy(&data.new_send_timeframe);
         pthread_mutex_destroy(&data.bytes_to_send_in_timeframe_lock);
+
+        pthread_mutex_destroy(&data.receiving_chunks_lock);
 
         pthread_mutex_destroy(&data.retransmit_queues_lock);
 
