@@ -33,9 +33,6 @@ using namespace std;
 #include "parse_files.hpp"
 #include "utils.hpp"
 
-// TODO(felipe): retransmit UDP discovery transmission (timeout?)
-// TODO(felipe): consider that a chunk may not exist in all nodes
-
 struct Send_Chunk_Args {
     Data* data;
     string file_to_send;
@@ -390,19 +387,10 @@ void* respond_discovery(void* arg) {
         receive_packet: {
             sem_wait(&data->notify_request_arrived);
 
-            cout << my_get_time() << "Passed semaphor" << endl;
-
             pthread_mutex_lock(&data->last_request_lock);
             received_packet = data->last_request;
             pthread_mutex_unlock(&data->last_request_lock);
         }
-
-        cout << my_get_time() << "Passed lock" << endl;
-
-        // TODO: Delete
-        cout << my_get_time();
-        print(&received_packet);
-        cout << endl;
 
         char const* file_name = received_packet.file.c_str();
         int file_name_size = received_packet.file.size();
@@ -411,7 +399,6 @@ void* respond_discovery(void* arg) {
 
         uint16_t start_port = data->next_tcp_port;
 
-        // TODO: delete thread
         create_send_chunk_threads_and_respond: {
             for (int i = 0; i < chunks.size(); i++) {
                 uint16_t tcp_port = start_port + i;

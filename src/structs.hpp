@@ -1,5 +1,12 @@
 #pragma once
 
+#include <string>
+#include <queue>
+
+#include <semaphore.h>
+
+using namespace std;
+
 constexpr int discovery_packet_max_size = 4096;
 
 enum Discovery_Type {
