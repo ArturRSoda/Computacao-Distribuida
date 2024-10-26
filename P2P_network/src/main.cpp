@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <time.h>
+#include <algorithm>
 
 #include <iostream>
 #include <sstream>
@@ -214,28 +215,34 @@ void* receive_udp_packets(void* void_arg) {
             Discovery_Request_Packet request = unserialize_discovery_request_packet(&s_rest);
             request.header = header;
 
-            cout << my_get_time() << "UDP packets from " << header.last_id << " " << endl;
-            print(&request);
+            if (request.request_id != data->this_node.id) {
+                cout << my_get_time() << "UDP packets from " << header.last_id << " " << endl;
+                print(&request);
 
-            pthread_mutex_lock(&data->last_request_lock);
-            data->last_request = request;
-            pthread_mutex_unlock(&data->last_request_lock);
+                pthread_mutex_lock(&data->last_request_lock);
+                data->last_request = request;
+                pthread_mutex_unlock(&data->last_request_lock);
 
-            sem_post(&data->notify_request_arrived);
+                sem_post(&data->notify_request_arrived);
 
-            pthread_mutex_lock(&data->retransmit_queues_lock);
-            Discovery_Request_Packet to_send_packet = request;
-            to_send_packet.header = new_header;
-            timespec curr_time = my_get_time();
-            data->requests_to_retransmit.push({to_send_packet, curr_time, header.last_id});
-            pthread_mutex_unlock(&data->retransmit_queues_lock);
-        } else if (header.type == type_response) {
+                pthread_mutex_lock(&data->retransmit_queues_lock);
+                Discovery_Request_Packet to_send_packet = request;
+                to_send_packet.header = new_header;
+                timespec curr_time = my_get_time();
+                data->requests_to_retransmit.push({to_send_packet, curr_time, header.last_id});
+                pthread_mutex_unlock(&data->retransmit_queues_lock);
+            }
+        }
+        else if (header.type == type_response) {
             Discovery_Response_Packet response = unserialize_discovery_response_packet(&s_rest);
             response.header = header;
+            data->received_responses.push_back(response);
 
             cout << my_get_time() << "UDP packets from " << header.last_id << " " << endl;
             print(&response);
 
+
+            /*
             pthread_mutex_lock(&data->last_response_lock);
             data->last_response = response;
             pthread_mutex_unlock(&data->last_response_lock);
@@ -252,6 +259,7 @@ void* receive_udp_packets(void* void_arg) {
             timespec curr_time = my_get_time();
             data->responses_to_retransmit.push({to_send_packet, curr_time, header.last_id});
             pthread_mutex_unlock(&data->retransmit_queues_lock);
+            */
         }
     }
 
@@ -302,6 +310,7 @@ void* retransmit_udp_packets(void* void_arg) {
             }
         }
 
+        /*
         if (data->responses_to_retransmit.size()) {
             auto response_tup = data->responses_to_retransmit.front();
 
@@ -330,6 +339,7 @@ void* retransmit_udp_packets(void* void_arg) {
                 }
             }
         }
+        */
 
         close(this_socket);
 
@@ -376,7 +386,6 @@ vector<int> get_chunks(Data* data, char const* file_name, int file_name_size) {
         }
     }
     closedir(directory);
-        
     return chunks;
 }
 
@@ -409,7 +418,8 @@ void* respond_discovery(void* arg) {
                     tcp_bind(server_socket, INADDR_ANY, tcp_port);
                     tcp_listen(server_socket);
 
-                    int timeout_milli = 2*received_packet.header.ttl * 1000;
+                    // int timeout_milli = 2*received_packet.header.ttl * 1000;
+                    int timeout_milli = (received_packet.header.ttl + 8) * 1000;
 
                     cout << my_get_time() << "Waiting in port " << tcp_port << endl;
 
@@ -435,12 +445,19 @@ void* respond_discovery(void* arg) {
                             received_packet.header.ttl - 1,
                             data->this_node.id
                         },
-                        data->this_node.ip, tcp_port, chunk
+                        data->this_node.id, data->this_node.ip, tcp_port, chunk, data->transmission_rate
                     };
 
                     if (response.header.ttl >= 0) {
                         string serialized_response = serialize_discovery_response_packet(&response);
 
+                        int request_ip = inet_addr(received_packet.request_ip.c_str());
+                        uint16_t request_port = received_packet.request_port;
+                        udp_send(this_socket, request_ip, request_port, &serialized_response);
+                        cout << my_get_time() << "Responding to " << received_packet.request_id << endl;
+                        print(&response);
+
+                        /*
                         for (Node& neighbor : data->neighbors) {
                             int neighbor_ip = inet_addr(neighbor.ip.c_str());
                             uint16_t neighbor_port = neighbor.port;
@@ -449,6 +466,7 @@ void* respond_discovery(void* arg) {
                             cout << my_get_time() << "Responding to " << neighbor.id << endl;
                             print(&response);
                         }
+                        */
 
                         close(this_socket);
                     }
@@ -462,6 +480,7 @@ void* respond_discovery(void* arg) {
     return 0;
 }
 
+// Faz requisicao de arquivo
 void* request_file(void* arg) {
     Data* data = (Data*)arg;
     while (true) {
@@ -478,6 +497,7 @@ void* request_file(void* arg) {
                 continue;
             }
 
+            // Informacoes para requisicao do arquivo
             File file_info;
             file_info_stream >> file_info.metadata_file_name;
             file_info_stream >> file_info.chunk_count;
@@ -488,6 +508,7 @@ void* request_file(void* arg) {
             break;
         }
 
+        // Struct do pedido de requisicao
         request_chunks: {
             Discovery_Request_Packet packet = {
                 Header {
@@ -496,12 +517,16 @@ void* request_file(void* arg) {
                     data->this_node.id
                 },
                 data->file.metadata_file_name,
+                data->this_node.id,
+                data->this_node.ip,
+                data->this_node.port
             };
 
             string serialized_packet = serialize_discovery_request_packet(&packet);
 
             int this_socket = udp_create_socket();
 
+            // Envia pedido de requisicoes para vizinhos
             for (Node& neighbor : data->neighbors) {
                 int ip = inet_addr(neighbor.ip.c_str());
                 uint16_t port = neighbor.port;
@@ -514,24 +539,32 @@ void* request_file(void* arg) {
             close(this_socket);
         }
 
+        // indica que esta requisitando arquivo
         pthread_mutex_lock(&data->request_file_lock);
         data->request_file = true;
         pthread_mutex_unlock(&data->request_file_lock);
 
+        // indica que esta recebendo chunks
         pthread_mutex_lock(&data->receiving_chunks_lock);
         data->receiving_chunks = true;
         data->chunks_being_received.assign(data->file.chunk_count, false);
         pthread_mutex_unlock(&data->receiving_chunks_lock);
 
+        // Inicia threads para receber chunks, uma thread para cada chunk
         vector<pthread_t> receive_chunk_threads;
+        int chunk_count = 0;
+        vector<vector<Discovery_Response_Packet>> received_responses;
+        for (int i = 0; i < data->file.chunk_count; i++)
+                received_responses.push_back({});
 
+        /*
         create_threads_to_receive_chunks: {
-            int chunk_count = 0;
             vector<bool> seen_chunks(data->file.chunk_count, false);
 
             char const* file_name = data->file.metadata_file_name.c_str();
             int file_name_size = data->file.metadata_file_name.size();
 
+            // Confere os chunks ja existentes
             vector<int> chunks_already_in_folder = get_chunks(data, file_name, file_name_size);
             for (int chunk : chunks_already_in_folder) {
                 if (!seen_chunks[chunk]) {
@@ -540,21 +573,34 @@ void* request_file(void* arg) {
                 seen_chunks[chunk] = true;
             }
 
-            while (chunk_count < data->file.chunk_count) {
+            int request_timeout = data->file.ttl+5;
+
+            sleep(request_timeout);
+
+            time_t request_start = time(0);
+            // while (chunk_count < data->file.chunk_count) {
+            while (difftime(time(0), request_start) < request_timeout) {
+                cout << "teste: "  << difftime(time(0), request_start) << request_timeout << endl;
+                // Espera receber resposta da requisicao
                 sem_wait(&data->notify_response_arrived);
 
+                // Salva resposta recebida
                 pthread_mutex_lock(&data->last_response_lock);
                 Discovery_Response_Packet temp_packet = data->last_response;
                 pthread_mutex_unlock(&data->last_response_lock);
 
+                // Se a respos fo para um chunk ainda nao recebido
                 if (!seen_chunks[temp_packet.chunk]) {
                     seen_chunks[temp_packet.chunk] = true;
+                    received_responses[temp_packet.chunk].push_back(temp_packet);
                     chunk_count++;
 
+                    // Indica que indica que chunk esta sendo recebido
                     pthread_mutex_lock(&data->receiving_chunks_lock);
                     data->chunks_being_received[temp_packet.chunk] = true;
                     pthread_mutex_unlock(&data->receiving_chunks_lock);
 
+                    // Cria thread para receber chunk
                     Receive_Chunk_Args* args = new Receive_Chunk_Args{
                         inet_addr(temp_packet.ip.c_str()),
                         temp_packet.port,
@@ -568,6 +614,56 @@ void* request_file(void* arg) {
                 }
             }
         }
+        */
+
+        vector<bool> seen_chunks(data->file.chunk_count, false);
+
+        char const* file_name = data->file.metadata_file_name.c_str();
+        int file_name_size = data->file.metadata_file_name.size();
+
+        // Confere os chunks ja existentes
+        vector<int> chunks_already_in_folder = get_chunks(data, file_name, file_name_size);
+        for (int chunk : chunks_already_in_folder) {
+            if (!seen_chunks[chunk]) {
+                chunk_count++;
+            }
+            seen_chunks[chunk] = true;
+        }
+
+        int request_timeout = data->file.ttl+5;
+        sleep(request_timeout);
+
+        for (auto response_packet: data->received_responses) {
+            if (!seen_chunks[response_packet.chunk]) {
+                seen_chunks[response_packet.chunk] = true;
+                received_responses[response_packet.chunk].push_back(response_packet);
+                chunk_count++;
+
+                pthread_mutex_lock(&data->receiving_chunks_lock);
+                data->chunks_being_received[response_packet.chunk] = true;
+                pthread_mutex_unlock(&data->receiving_chunks_lock);
+            }
+        }
+
+        for (auto v: received_responses) {
+            if (not v.empty()) {
+                sort(v.begin(), v.end(), compareByTransmissionRate);
+                Discovery_Response_Packet chosen_packet = v[0];
+
+                Receive_Chunk_Args* args = new Receive_Chunk_Args{
+                    inet_addr(chosen_packet.ip.c_str()),
+                    chosen_packet.port,
+                    data->file.metadata_file_name + ".ch" + to_string(chosen_packet.chunk)
+                };
+
+                pthread_t new_thread = 0;
+                pthread_create(&new_thread, 0, receive_chunk, args);
+
+                receive_chunk_threads.push_back(new_thread);
+
+                cout << my_get_time() << "Receiving chunk " << chosen_packet.chunk << " from " << chosen_packet.id << endl;
+            }
+        }
 
         for (pthread_t thread : receive_chunk_threads) {
             pthread_join(thread, 0);
@@ -577,25 +673,31 @@ void* request_file(void* arg) {
         data->receiving_chunks = false;
         pthread_mutex_unlock(&data->receiving_chunks_lock);
 
-        create_original_file: {
-            ofstream original_file(data->file.metadata_file_name, ios::binary | ios::trunc);
+        if (chunk_count < data->file.chunk_count) {
+            cout << my_get_time() << "Not all chunks received" << endl;
+        } else {
+            create_original_file: {
+                ofstream original_file(data->file.metadata_file_name, ios::binary | ios::trunc);
 
-            for (int i = 0; i < data->file.chunk_count; i++) {
-                ifstream chunk_file(data->file.metadata_file_name + ".ch" + to_string(i), ios::binary);
-                while (true) {
-                    char ch = 0;
-                    chunk_file.get(ch);
+                for (int i = 0; i < data->file.chunk_count; i++) {
+                    ifstream chunk_file(data->file.metadata_file_name + ".ch" + to_string(i), ios::binary);
+                    while (true) {
+                        char ch = 0;
+                        chunk_file.get(ch);
 
-                    if (!chunk_file) {
-                        break;
+                        if (!chunk_file) {
+                            break;
+                        }
+
+                        original_file.put(ch);
                     }
-
-                    original_file.put(ch);
                 }
             }
+
+            cout << my_get_time() << "Received all chunks" << endl;
         }
 
-        cout << my_get_time() << "Received all chunks" << endl;
+        data->received_responses.clear();
 
         pthread_mutex_lock(&data->request_file_lock);
         data->request_file = false;
@@ -621,12 +723,16 @@ void* manage_bytes_to_send(void* arg) {
 int main(int argc, char** argv) {
     assert(argc >= 2);
 
+    // Recebe como argumento id do no
     Data data = {};
     data.this_node.id = atoi(argv[1]);
     data.next_tcp_port = 10000 + (1000 * data.this_node.id);
+    data.received_responses = {};
 
+    // le as informacoes necessarias
     set_nodes(&data, data.this_node.id);
 
+    // Inicia semaforos, mutex e threads
     init: {
         sem_init(&data.new_send_timeframe, 0, 0);
         pthread_mutex_init(&data.bytes_to_send_in_timeframe_lock, 0);

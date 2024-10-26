@@ -1,4 +1,10 @@
 #include "utils.hpp"
+#include <cstdint>
+#include <string>
+
+bool compareByTransmissionRate(const Discovery_Response_Packet &a, const Discovery_Response_Packet &b) {
+    return a.transmission_rate < b.transmission_rate;
+}
 
 timespec my_get_time() {
     timespec curr_time;
@@ -27,14 +33,19 @@ void print(Header* header) {
 void print(Discovery_Request_Packet* packet) {
     print(&packet->header);
     cout << "File: " << packet->file << endl;
+    cout << "Request id: " << packet->request_id << endl;
+    cout << "Request ip: " << packet->request_ip << endl;
+    cout << "Request port: " << packet->request_port << endl;
     cout << endl;
 }
 
 void print(Discovery_Response_Packet* packet) {
     print(&packet->header);
+    cout << "Origin ID " << packet->id << endl;
     cout << "IP: " << packet->ip << endl;
     cout << "Port: " << packet->port << endl;
     cout << "Chunk: " << packet->chunk << endl;
+    cout << "Transmission Rate: " << packet->transmission_rate << endl;
     cout << endl;
 }
 
@@ -59,7 +70,34 @@ Discovery_Request_Packet unserialize_discovery_request_packet(string* serialized
         line >> file;
     }
 
-    return Discovery_Request_Packet{Header{}, file};
+    int request_id;
+    {
+        string s;
+        getline(all_lines, s);
+        stringstream line(s);
+
+        line >> request_id;
+    }
+
+    string request_ip;
+    {
+        string s;
+        getline(all_lines, s);
+        stringstream line(s);
+
+        line >> request_ip;
+    }
+
+    uint16_t request_port;
+    {
+        string s;
+        getline(all_lines, s);
+        stringstream line(s);
+
+        line >> request_port;
+    }
+
+    return Discovery_Request_Packet{Header{}, file, request_id, request_ip, request_port};
 }
 
 string serialize_discovery_request_packet(Discovery_Request_Packet* packet) {
@@ -77,15 +115,33 @@ string serialize_discovery_request_packet(Discovery_Request_Packet* packet) {
     s += packet->file;
     s += '\n';
 
+    s += packet->request_id;
+    s += '\n';
+
+    s += packet->request_ip;
+    s += '\n';
+
+    s += to_string(packet->request_port);
+    s += '\n';
+
     return s;
 }
 
 Discovery_Response_Packet unserialize_discovery_response_packet(string* serialized) {
     stringstream all_lines(*serialized);
 
+    int id;
     string ip;
     uint16_t port;
     int chunk;
+    int transmission_rate;
+    {
+        string s;
+        getline(all_lines, s);
+        stringstream line(s);
+
+        line >> id;
+    }
     {
         string s;
         getline(all_lines, s);
@@ -107,8 +163,15 @@ Discovery_Response_Packet unserialize_discovery_response_packet(string* serializ
 
         line >> chunk;
     }
+    {
+        string s;
+        getline(all_lines, s);
+        stringstream line(s);
 
-    return Discovery_Response_Packet{Header{}, ip, port, chunk};
+        line >> transmission_rate;
+    }
+
+    return Discovery_Response_Packet{Header{}, id, ip, port, chunk, transmission_rate};
 }
 
 string serialize_discovery_response_packet(Discovery_Response_Packet* packet) {
@@ -123,6 +186,9 @@ string serialize_discovery_response_packet(Discovery_Response_Packet* packet) {
     s += to_string(packet->header.last_id);
     s += '\n';
 
+    s += to_string(packet->id);
+    s += '\n';
+
     s += packet->ip;
     s += '\n';
 
@@ -130,6 +196,9 @@ string serialize_discovery_response_packet(Discovery_Response_Packet* packet) {
     s += '\n';
 
     s += to_string(packet->chunk);
+    s += '\n';
+
+    s += to_string(packet->transmission_rate);
     s += '\n';
 
     return s;

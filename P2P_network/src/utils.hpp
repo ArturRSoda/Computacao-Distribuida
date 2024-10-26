@@ -34,3 +34,5 @@ string udp_receive(int this_socket, int max_bytes, in_addr_t* ip = 0, in_port_t*
 void general_send(int this_socket, in_addr_t ip, uint16_t port, string* message);
 void tcp_send(int this_socket, in_addr_t ip, uint16_t port, string* message);
 void udp_send(int this_socket, in_addr_t ip, uint16_t port, string* message);
+bool compareByTransmissionRate(const Discovery_Response_Packet &a, const Discovery_Response_Packet &b);
+

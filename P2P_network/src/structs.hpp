@@ -23,13 +23,18 @@ struct Header {
 struct Discovery_Request_Packet {
     Header header;
     string file;
+    int request_id;
+    string request_ip;
+    uint16_t request_port;
 };
 
 struct Discovery_Response_Packet {
     Header header;
+    int id;
     string ip;
     uint16_t port;
     int chunk;
+    int transmission_rate;
 };
 
 struct Node {
@@ -74,6 +79,8 @@ struct Data {
     // NOTE(felipe): packet, time of receive, last_id
     queue<tuple<Discovery_Request_Packet, timespec, int>> requests_to_retransmit;
     queue<tuple<Discovery_Response_Packet, timespec, int>> responses_to_retransmit;
+
+    vector<Discovery_Response_Packet> received_responses;
 
     pthread_mutex_t retransmit_queues_lock;
 
