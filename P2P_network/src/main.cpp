@@ -369,7 +369,7 @@ void* respond_discovery(void* arg) {
                     tcp_bind(server_socket, INADDR_ANY, tcp_port);
                     tcp_listen(server_socket);
 
-                    int timeout_milli = (received_packet.header.ttl+5) * 1000;
+                    int timeout_milli = (received_packet.header.ttl+10) * 1000;
 
                     cout << my_get_time() << "Waiting in port " << tcp_port << endl;
 
