@@ -525,7 +525,7 @@ void* request_file(void* arg) {
         for (auto v: received_responses) {
             if (not v.empty()) {
                 sort(v.begin(), v.end(), compareByTransmissionRate);
-                Discovery_Response_Packet chosen_packet = v[0];
+                Discovery_Response_Packet chosen_packet = v.back();
 
                 Receive_Chunk_Args* args = new Receive_Chunk_Args{
                     inet_addr(chosen_packet.ip.c_str()),
