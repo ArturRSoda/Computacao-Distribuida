@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pthread.h>
 #include <string>
 #include <queue>
 
@@ -78,22 +79,15 @@ struct Data {
 
     // NOTE(felipe): packet, time of receive, last_id
     queue<tuple<Discovery_Request_Packet, timespec, int>> requests_to_retransmit;
-    queue<tuple<Discovery_Response_Packet, timespec, int>> responses_to_retransmit;
 
     vector<Discovery_Response_Packet> received_responses;
+    pthread_mutex_t received_responses_lock;
 
     pthread_mutex_t retransmit_queues_lock;
 
     Discovery_Request_Packet last_request;
     pthread_mutex_t last_request_lock;
 
-    Discovery_Response_Packet last_response;
-    pthread_mutex_t last_response_lock;
-
-    bool request_file = false;
-    pthread_mutex_t request_file_lock;
-
     sem_t notify_request_arrived;
-    sem_t notify_response_arrived;
 };
 

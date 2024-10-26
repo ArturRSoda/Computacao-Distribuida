@@ -236,30 +236,13 @@ void* receive_udp_packets(void* void_arg) {
         else if (header.type == type_response) {
             Discovery_Response_Packet response = unserialize_discovery_response_packet(&s_rest);
             response.header = header;
+
+            pthread_mutex_lock(&data->received_responses_lock);
             data->received_responses.push_back(response);
+            pthread_mutex_unlock(&data->received_responses_lock);
 
             cout << my_get_time() << "UDP packets from " << header.last_id << " " << endl;
             print(&response);
-
-
-            /*
-            pthread_mutex_lock(&data->last_response_lock);
-            data->last_response = response;
-            pthread_mutex_unlock(&data->last_response_lock);
-
-            pthread_mutex_lock(&data->request_file_lock);
-            if (data->request_file) {
-                sem_post(&data->notify_response_arrived);
-            }
-            pthread_mutex_unlock(&data->request_file_lock);
-
-            pthread_mutex_lock(&data->retransmit_queues_lock);
-            Discovery_Response_Packet to_send_packet = response;
-            to_send_packet.header = new_header;
-            timespec curr_time = my_get_time();
-            data->responses_to_retransmit.push({to_send_packet, curr_time, header.last_id});
-            pthread_mutex_unlock(&data->retransmit_queues_lock);
-            */
         }
     }
 
@@ -309,38 +292,6 @@ void* retransmit_udp_packets(void* void_arg) {
                 }
             }
         }
-
-        /*
-        if (data->responses_to_retransmit.size()) {
-            auto response_tup = data->responses_to_retransmit.front();
-
-            timespec last_time = get<1>(response_tup);
-            double diff_milli = sec_to_milli * (curr_time.tv_sec - last_time.tv_sec) + nsec_to_milli * (curr_time.tv_nsec - last_time.tv_nsec);
-
-            if (diff_milli > 1000) {
-                data->responses_to_retransmit.pop();
-
-                Discovery_Response_Packet to_send_packet = get<0>(response_tup);
-                if (to_send_packet.header.ttl >= 0) {
-                    string serialized_packet = serialize_discovery_response_packet(&to_send_packet);
-
-                    for (Node& neighbor : data->neighbors) {
-                        if (neighbor.id == get<2>(response_tup)) {
-                            continue;
-                        }
-
-                        int neighbor_ip = inet_addr(neighbor.ip.c_str());
-                        uint16_t neighbor_port = neighbor.port;
-                        udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_packet);
-
-                        cout << curr_time << "Retransmiting to " << neighbor.id << endl;
-                        print(&to_send_packet);
-                    }
-                }
-            }
-        }
-        */
-
         close(this_socket);
 
         pthread_mutex_unlock(&data->retransmit_queues_lock);
@@ -418,8 +369,7 @@ void* respond_discovery(void* arg) {
                     tcp_bind(server_socket, INADDR_ANY, tcp_port);
                     tcp_listen(server_socket);
 
-                    // int timeout_milli = 2*received_packet.header.ttl * 1000;
-                    int timeout_milli = (received_packet.header.ttl + 8) * 1000;
+                    int timeout_milli = (received_packet.header.ttl+5) * 1000;
 
                     cout << my_get_time() << "Waiting in port " << tcp_port << endl;
 
@@ -456,17 +406,6 @@ void* respond_discovery(void* arg) {
                         udp_send(this_socket, request_ip, request_port, &serialized_response);
                         cout << my_get_time() << "Responding to " << received_packet.request_id << endl;
                         print(&response);
-
-                        /*
-                        for (Node& neighbor : data->neighbors) {
-                            int neighbor_ip = inet_addr(neighbor.ip.c_str());
-                            uint16_t neighbor_port = neighbor.port;
-                            udp_send(this_socket, neighbor_ip, neighbor_port, &serialized_response);
-
-                            cout << my_get_time() << "Responding to " << neighbor.id << endl;
-                            print(&response);
-                        }
-                        */
 
                         close(this_socket);
                     }
@@ -539,11 +478,6 @@ void* request_file(void* arg) {
             close(this_socket);
         }
 
-        // indica que esta requisitando arquivo
-        pthread_mutex_lock(&data->request_file_lock);
-        data->request_file = true;
-        pthread_mutex_unlock(&data->request_file_lock);
-
         // indica que esta recebendo chunks
         pthread_mutex_lock(&data->receiving_chunks_lock);
         data->receiving_chunks = true;
@@ -556,65 +490,6 @@ void* request_file(void* arg) {
         vector<vector<Discovery_Response_Packet>> received_responses;
         for (int i = 0; i < data->file.chunk_count; i++)
                 received_responses.push_back({});
-
-        /*
-        create_threads_to_receive_chunks: {
-            vector<bool> seen_chunks(data->file.chunk_count, false);
-
-            char const* file_name = data->file.metadata_file_name.c_str();
-            int file_name_size = data->file.metadata_file_name.size();
-
-            // Confere os chunks ja existentes
-            vector<int> chunks_already_in_folder = get_chunks(data, file_name, file_name_size);
-            for (int chunk : chunks_already_in_folder) {
-                if (!seen_chunks[chunk]) {
-                    chunk_count++;
-                }
-                seen_chunks[chunk] = true;
-            }
-
-            int request_timeout = data->file.ttl+5;
-
-            sleep(request_timeout);
-
-            time_t request_start = time(0);
-            // while (chunk_count < data->file.chunk_count) {
-            while (difftime(time(0), request_start) < request_timeout) {
-                cout << "teste: "  << difftime(time(0), request_start) << request_timeout << endl;
-                // Espera receber resposta da requisicao
-                sem_wait(&data->notify_response_arrived);
-
-                // Salva resposta recebida
-                pthread_mutex_lock(&data->last_response_lock);
-                Discovery_Response_Packet temp_packet = data->last_response;
-                pthread_mutex_unlock(&data->last_response_lock);
-
-                // Se a respos fo para um chunk ainda nao recebido
-                if (!seen_chunks[temp_packet.chunk]) {
-                    seen_chunks[temp_packet.chunk] = true;
-                    received_responses[temp_packet.chunk].push_back(temp_packet);
-                    chunk_count++;
-
-                    // Indica que indica que chunk esta sendo recebido
-                    pthread_mutex_lock(&data->receiving_chunks_lock);
-                    data->chunks_being_received[temp_packet.chunk] = true;
-                    pthread_mutex_unlock(&data->receiving_chunks_lock);
-
-                    // Cria thread para receber chunk
-                    Receive_Chunk_Args* args = new Receive_Chunk_Args{
-                        inet_addr(temp_packet.ip.c_str()),
-                        temp_packet.port,
-                        data->file.metadata_file_name + ".ch" + to_string(temp_packet.chunk)
-                    };
-
-                    pthread_t new_thread = 0;
-                    pthread_create(&new_thread, 0, receive_chunk, args);
-
-                    receive_chunk_threads.push_back(new_thread);
-                }
-            }
-        }
-        */
 
         vector<bool> seen_chunks(data->file.chunk_count, false);
 
@@ -633,6 +508,7 @@ void* request_file(void* arg) {
         int request_timeout = data->file.ttl+5;
         sleep(request_timeout);
 
+        pthread_mutex_lock(&data->received_responses_lock);
         for (auto response_packet: data->received_responses) {
             if (!seen_chunks[response_packet.chunk]) {
                 seen_chunks[response_packet.chunk] = true;
@@ -644,6 +520,7 @@ void* request_file(void* arg) {
                 pthread_mutex_unlock(&data->receiving_chunks_lock);
             }
         }
+        pthread_mutex_unlock(&data->received_responses_lock);
 
         for (auto v: received_responses) {
             if (not v.empty()) {
@@ -697,11 +574,10 @@ void* request_file(void* arg) {
             cout << my_get_time() << "Received all chunks" << endl;
         }
 
+        pthread_mutex_lock(&data->received_responses_lock);
         data->received_responses.clear();
+        pthread_mutex_unlock(&data->received_responses_lock);
 
-        pthread_mutex_lock(&data->request_file_lock);
-        data->request_file = false;
-        pthread_mutex_unlock(&data->request_file_lock);
     }
 
     return 0;
@@ -723,31 +599,21 @@ void* manage_bytes_to_send(void* arg) {
 int main(int argc, char** argv) {
     assert(argc >= 2);
 
-    // Recebe como argumento id do no
     Data data = {};
     data.this_node.id = atoi(argv[1]);
     data.next_tcp_port = 10000 + (1000 * data.this_node.id);
     data.received_responses = {};
 
-    // le as informacoes necessarias
     set_nodes(&data, data.this_node.id);
 
-    // Inicia semaforos, mutex e threads
     init: {
+        pthread_mutex_init(&data.received_responses_lock, 0);
         sem_init(&data.new_send_timeframe, 0, 0);
         pthread_mutex_init(&data.bytes_to_send_in_timeframe_lock, 0);
-
         pthread_mutex_init(&data.receiving_chunks_lock, 0);
-
         pthread_mutex_init(&data.retransmit_queues_lock, 0);
-
         pthread_mutex_init(&data.last_request_lock, 0);
-        pthread_mutex_init(&data.last_response_lock, 0);
-
-        pthread_mutex_init(&data.request_file_lock, 0);
-
         sem_init(&data.notify_request_arrived, 0, 0);
-        sem_init(&data.notify_response_arrived, 0, 0);
 
         pthread_create(&data.receive_udp_packets_thread, 0, receive_udp_packets, &data);
         pthread_create(&data.retransmit_udp_packets_thread, 0, retransmit_udp_packets, &data);
@@ -767,20 +633,13 @@ int main(int argc, char** argv) {
     }
 
     destroy: {
+        pthread_mutex_destroy(&data.received_responses_lock);
         sem_destroy(&data.new_send_timeframe);
         pthread_mutex_destroy(&data.bytes_to_send_in_timeframe_lock);
-
         pthread_mutex_destroy(&data.receiving_chunks_lock);
-
         pthread_mutex_destroy(&data.retransmit_queues_lock);
-
         pthread_mutex_destroy(&data.last_request_lock);
-        pthread_mutex_destroy(&data.last_response_lock);
-
-        pthread_mutex_destroy(&data.request_file_lock);
-
         sem_destroy(&data.notify_request_arrived);
-        sem_destroy(&data.notify_response_arrived);
     }
 
     return 0;
