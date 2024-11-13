@@ -407,7 +407,9 @@ void *respond_discovery(void *arg) {
 
           int request_ip = inet_addr(received_packet.request_ip.c_str());
           uint16_t request_port = received_packet.request_port;
+
           udp_send(this_socket, request_ip, request_port, &serialized_response);
+
           cout << my_get_time() << "Responding to "
                << received_packet.request_id << endl;
           print(&response);
@@ -461,6 +463,10 @@ void *request_file(void *arg) {
 
     int this_socket = udp_create_socket();
 
+    pthread_mutex_lock(&data->received_responses_lock);
+    data->received_responses.clear();
+    pthread_mutex_unlock(&data->received_responses_lock);
+
     for (Node &neighbor : data->neighbors) {
       int ip = inet_addr(neighbor.ip.c_str());
       uint16_t port = neighbor.port;
@@ -479,6 +485,7 @@ void *request_file(void *arg) {
     pthread_mutex_unlock(&data->receiving_chunks_lock);
 
     vector<pthread_t> receive_chunk_threads;
+
     int chunk_count = 0;
     vector<vector<Discovery_Response_Packet>> received_responses;
     for (int i = 0; i < data->file.chunk_count; i++)
@@ -503,14 +510,25 @@ void *request_file(void *arg) {
 
     pthread_mutex_lock(&data->received_responses_lock);
     for (auto response_packet : data->received_responses) {
-      if (!seen_chunks[response_packet.chunk]) {
-        seen_chunks[response_packet.chunk] = true;
-        received_responses[response_packet.chunk].push_back(response_packet);
-        chunk_count++;
+      bool in_folder = false;
+      for (int chunk : chunks_already_in_folder) {
+        if (response_packet.chunk == chunk) {
+          in_folder = true;
+          break;
+        }
+      }
 
-        pthread_mutex_lock(&data->receiving_chunks_lock);
-        data->chunks_being_received[response_packet.chunk] = true;
-        pthread_mutex_unlock(&data->receiving_chunks_lock);
+      if (!in_folder) {
+        if (!seen_chunks[response_packet.chunk]) {
+          seen_chunks[response_packet.chunk] = true;
+          chunk_count++;
+
+          pthread_mutex_lock(&data->receiving_chunks_lock);
+          data->chunks_being_received[response_packet.chunk] = true;
+
+          pthread_mutex_unlock(&data->receiving_chunks_lock);
+        }
+        received_responses[response_packet.chunk].push_back(response_packet);
       }
     }
     pthread_mutex_unlock(&data->received_responses_lock);
@@ -568,10 +586,6 @@ void *request_file(void *arg) {
 
       cout << my_get_time() << "Received all chunks" << endl;
     }
-
-    pthread_mutex_lock(&data->received_responses_lock);
-    data->received_responses.clear();
-    pthread_mutex_unlock(&data->received_responses_lock);
   }
 
   return 0;
