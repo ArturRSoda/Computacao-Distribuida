@@ -1,0 +1,124 @@
+Varios clientes
+Varios servidores
+Servidores vao ter banco de dados
+Clientes vao fazer transacoes
+Clientes tem acesso a todos os servidores
+
+Transacao {
+    rs: dados lidos
+    ws: conjunto de alteracoes
+
+    Escolhe servidor arbitrario como s
+
+    Execution phase {
+        Operacoes de leitura
+        Operacoes de escrita local
+
+        Pode ter leitura seguido de escrita ou vice versa
+        Se a leitura for de um item ja escrito, nao pede ao servidor
+        Se a leitura for de um item ja lido, pede de novo
+    }
+    Termination phase {
+        Commit {
+            Atomic broadcast, enviando o rs e ws
+            Servidor {
+                if rs_atualizado {
+                    aplicar_operacoes_ws_em_ordem()
+                } else {
+                    // nada
+                }
+            }
+            Se o servidor for s, ele vai retornar reposta ao cliente
+        }
+    }
+}
+
+Codigo {
+    struct MessageConnection {
+        int transaction_id;
+    }
+
+    enum RequestType {
+        request_read,
+        request_commit
+    }
+
+    struct RequestHeader {
+        RequestType type;
+    }
+
+    struct MessageRequestRead {
+        RequestHeader header;
+        int client_id;
+        string variable_name;
+    }
+
+    struct MessageResponseRead {
+        float value;
+        string version;
+    }
+
+    struct MessageRequestCommit {
+        RequestHeader header;
+        int client_id;
+        int transaction_id;
+        vector<ReadOp> rs;
+        vector<WriteOp> ws;
+    }
+
+    struct MessageResponseCommit {
+        int status;
+        int transaction_id;
+    }
+
+    struct ReadOp {
+        string variable_name;
+        float value;
+        string version;
+    }
+
+    struct WriteOp {
+        string variable_name;
+        float value;
+    }
+
+    struct DatabaseData {
+        string variable_name;
+        float value;
+        string version;
+    }
+
+    struct Database {
+        vector<DatabaseData> data;
+    }
+}
+
+Arquivos de configuracao {
+    Banco de dados {
+        x 0 0
+        y 2 0
+        z 3 0
+    }
+    Servidor {
+        server_id 3
+    }
+    Cliente {
+        client_id 3
+
+        transaction_start
+        read x
+        write y x
+        read z
+        write z x + y
+        transaction_end
+
+        time 3
+
+        transaction_start
+        read x
+        write y x
+        read z
+        write z x * y
+        transaction_end
+    }
+}
