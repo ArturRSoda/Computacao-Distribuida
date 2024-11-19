@@ -10,8 +10,18 @@ enum RequestType {
     request_commit
 };
 
+
 struct RequestHeader {
     RequestType type;
+};
+
+
+struct Operation {
+    string type;
+    string variable_name;
+    float value;
+    string  version;
+    int time;
 };
 
 struct ReadOp {
@@ -55,6 +65,12 @@ struct DatabaseData {
     string version;
 };
 
-struct Database {
-    vector<DatabaseData> data;
+struct Config {
+    string clientORserver;
+    int id;
+    int n_clients;
+    int n_servers;
+    vector<DatabaseData> dataBase;
+    vector<vector<Operation>> all_operations;
+    vector<Operation> my_operations;
 };
