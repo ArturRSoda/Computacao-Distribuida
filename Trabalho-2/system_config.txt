@@ -8,19 +8,32 @@ data_base:
 end
 
 client_op:
-    - read x 0.0 10
-    - write y 10 20
-    - read z 0.0 30
+    transaction:
+        - read x 10
+        - write y 10 20
+        - read z 30
+    end
+    transaction:
+        - write z 20 40
+        - read x 50
+    end
+    transaction:
+        - read z 60
+    end
 end
 
 client_op:
-    - write z 20 40
-    - read x 1.0 50
+    transaction:
+        - write z 20 70
+        - read x 80
+    end
 end
 
 client_op:
-    - read x 2.0 60
-    - write x 30 70
+    transaction:
+        - read x 90
+        - write x 30 100
+    end
 end
 
 client_op:

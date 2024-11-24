@@ -384,9 +384,11 @@ void udp_send(int this_socket, in_addr_t ip, uint16_t port, string* message) {
 
 void read_config(Config* config) {
     string s;
-    vector<Operation> operations;
+    vector<Operation> transaction;
+    vector<vector<Operation>> operations;
     bool read_db = false;
     bool read_client_op = false;
+    bool read_transaction = false;
 
     ifstream file("./system_config.txt");
     assert(file.is_open()); 
@@ -408,6 +410,9 @@ void read_config(Config* config) {
         else if (header == "client_op:") {
             read_client_op = true;
         }
+        else if (header == "transaction:") {
+            read_transaction = true;
+        }
         else if (header == "-") {
             if (read_db) {
                 DatabaseData data;
@@ -416,20 +421,18 @@ void read_config(Config* config) {
                 ss >> data.version;
                 config->dataBase.push_back(data);
             }
-            else if (read_client_op) {
+            else if (read_transaction) {
                 Operation op;
                 ss >> op.type;
                 ss >> op.variable_name;
 
-                if (op.type == "read") {
-                    ss >> op.version;
-                }
-                else if (op.type == "write") {
+                if (op.type == "write") {
                     ss >> op.value;
                 }
+
                 ss >> op.time;
 
-                operations.push_back(op);
+                transaction.push_back(op);
             }
         }
         else if (header == "end") {
@@ -437,10 +440,22 @@ void read_config(Config* config) {
                 read_db = false;
             }
             else if (read_client_op) {
-                read_client_op = false;
-                vector<Operation> v(operations);
-                config->all_operations.push_back(v);
-                operations.clear();
+                if (read_transaction) {
+                    read_transaction = false;
+                    vector<Operation> v(transaction);
+                    operations.push_back(v);
+                    transaction.clear();
+                }
+                else {
+                    read_client_op = false;
+                    vector<vector<Operation>> ops;
+                    for (auto v : operations) {
+                        vector<Operation> v_(v);
+                        ops.push_back(v_);
+                    }
+                    config->all_operations.push_back(ops);
+                    operations.clear();
+                }
             }
         }
     }

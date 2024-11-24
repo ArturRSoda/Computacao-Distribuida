@@ -22,7 +22,7 @@ struct Operation {
     string type;
     string variable_name;
     float value;
-    string  version;
+    string version;
     int time;
 };
 
@@ -75,6 +75,6 @@ struct Config {
     int n_clients;
     int n_servers;
     vector<DatabaseData> dataBase;
-    vector<vector<Operation>> all_operations;
-    vector<Operation> my_operations;
+    vector<vector<vector<Operation>>> all_operations;
+    vector<vector<Operation>> my_operations;
 };

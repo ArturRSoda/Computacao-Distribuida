@@ -125,21 +125,32 @@ Arquivos de configuracao {
 
     # Numero de definicoes de operacoes deve ser de acordo com numero de clientes
     client_op:
-        - read ; name ; version ; time
-        - write ; name ; value ; time
-        - read x 0.0 10
-        - write y 10 20
-        - read z 0.0 30
+        transaction:
+            - read ; name ; time
+            - write ; name ; value ; time
+        end
+        transaction:
+            - read x 10
+            - write y 10 20
+            - read z 30
+        transaction:
+            - write z 20 40
+            - read x 1.0 50
+        end
     end
 
     client_op:
-        - write z 20 40
-        - read x 1.0 50
+        transaction:
+            - write z 20 40
+            - read x 1.0 50
+        end
     end
 
     client_op:
-        - read x 2.0 60
-        - write x 30 70
+        transaction:
+            - read x 2.0 60
+            - write x 30 70
+        end
     end
 
     client_op:
