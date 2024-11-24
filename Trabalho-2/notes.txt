@@ -34,41 +34,60 @@ Transacao {
 }
 
 Codigo {
-    struct MessageConnection {
-        int transaction_id;
+    {
+        Iniciar processos dos servidores antes dos processos dos clientes
+        No inicio do programa, cliente ja inicia com servidor definido e inicia conexao
+        Servidor nao espera pelo cliente, mas sim por eventos
+        Servidor da polling nos sockets (clientes conectados e difusao atomica)
+        Transacao no cliente so inicia quando a ultima terminou
+        Se transacao nao funcionou, perdeu
+
+        TODO {
+            Na difusao atomica os servidores vao comunicar entre si?
+        }
     }
 
-    enum RequestType {
-        request_read,
-        request_commit
+    TODO {
+        [Artur: Feito] Arquivo de configuracao (feito)
+        [] Simular a transacao
+        [] Implementar banco de dados
+        [] Commit: difusao atomica
+        [] [Opcional] melhorar operacoes do write (+, -, *, /)
     }
 
-    struct RequestHeader {
-        RequestType type;
-    }
+    Messages {
+        enum RequestType {
+            request_read,
+            request_commit
+        }
 
-    struct MessageRequestRead {
-        RequestHeader header;
-        int client_id;
-        string variable_name;
-    }
+        struct RequestHeader {
+            RequestType type;
+        }
 
-    struct MessageResponseRead {
-        float value;
-        string version;
-    }
+        struct MessageRequestRead {
+            RequestHeader header;
+            int client_id;
+            string variable_name;
+        }
 
-    struct MessageRequestCommit {
-        RequestHeader header;
-        int client_id;
-        int transaction_id;
-        vector<ReadOp> rs;
-        vector<WriteOp> ws;
-    }
+        struct MessageResponseRead {
+            float value;
+            string version;
+        }
 
-    struct MessageResponseCommit {
-        int status;
-        int transaction_id;
+        struct MessageRequestCommit {
+            RequestHeader header;
+            int client_id;
+            int transaction_id;
+            vector<ReadOp> rs;
+            vector<WriteOp> ws;
+        }
+
+        struct MessageResponseCommit {
+            int status;
+            int transaction_id;
+        }
     }
 
     struct ReadOp {
