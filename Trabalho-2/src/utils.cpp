@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <sstream>
@@ -12,6 +13,37 @@
 #include "structs.hpp"
 
 using namespace std;
+
+
+DatabaseData get_db_var(string var_name, vector<DatabaseData>* db) {
+    DatabaseData dbd;
+    for (auto v : *db) {
+        if (v.variable_name == var_name) {
+            dbd = v;
+            break;
+        }
+    }
+    return dbd;
+}
+
+void set_db_value(string var_name, float value, vector<DatabaseData>* db) {
+    for (int i = 0; i < db->size(); i++) {
+        if (db->at(i).variable_name == var_name) {
+            db->at(i).value = value;
+            return;
+        }
+    }
+}
+
+void add_db_version(string var_name, vector<DatabaseData>* db) {
+    for (int i = 0; i < db->size(); i++) {
+        if (db->at(i).variable_name == var_name) {
+            db->at(i).version++;
+            return;
+        }
+    }
+
+}
 
 
 void print(Header* header) {
@@ -36,6 +68,7 @@ void print(MessageRequestRead* rr) {
 
 void print(MessageResponseRead* rr) {
     print(&rr->header);
+    cout << "Var name: " << rr->variable_name << endl;
     cout << "Value: " << rr->value << endl;
     cout << "Version: " << rr->version << endl;
     cout << endl;
@@ -100,9 +133,11 @@ string serialize_MessageResponseRead(MessageResponseRead* response) {
 
     s = to_string(response->header.type);
     s += " ";
+    s += response->variable_name;
+    s += " ";
     s += to_string(response->value);
     s += " ";
-    s += response->version;
+    s += to_string(response->version);
     s += '\n';
 
     return s;
@@ -114,17 +149,19 @@ MessageResponseRead unserialize_MessageResponseRead(string* serialized) {
     string s;
 
     int header_type;
+    string variable_name;
     float value;
-    string version;
+    float version;
 
     getline(all_lines, s);
     stringstream ss(s);
 
     ss >> header_type;
+    ss >> variable_name;
     ss >> value;
     ss >> version;
 
-    return MessageResponseRead{Header{(HeaderType) header_type}, value, version};
+    return MessageResponseRead{Header{(HeaderType) header_type}, variable_name, value, version};
 }
 
 string serialize_MessageRequestCommit(MessageRequestCommit* request) {
@@ -143,7 +180,7 @@ string serialize_MessageRequestCommit(MessageRequestCommit* request) {
         s += " ";
         s += to_string(ro.value);
         s += " ";
-        s += ro.version;
+        s += to_string(ro.version);
         s += '\n';
     }
     s += ">\n";
@@ -180,7 +217,7 @@ MessageRequestCommit unserialize_MessageRequestCommit(string* serialized) {
     while (true) {
         string variable_name;
         float value;
-        string version;
+        float version;
 
         getline(all_lines, s);
         if (s == ">") break;

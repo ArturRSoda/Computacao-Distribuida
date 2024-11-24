@@ -5,6 +5,8 @@
 
 using namespace std;
 
+constexpr int packet_max_size = 4096;
+
 enum HeaderType {
     request_read,
     response_read,
@@ -22,14 +24,14 @@ struct Operation {
     string type;
     string variable_name;
     float value;
-    string version;
+    float version;
     int time;
 };
 
 struct ReadOp {
     string variable_name;
     float value;
-    string version;
+    float version;
 };
 
 struct WriteOp {
@@ -45,8 +47,9 @@ struct MessageRequestRead {
 
 struct MessageResponseRead {
     Header header;
+    string variable_name;
     float value;
-    string version;
+    float version;
 };
 
 struct MessageRequestCommit {
@@ -66,7 +69,7 @@ struct MessageResponseCommit {
 struct DatabaseData {
     string variable_name;
     float value;
-    string version;
+    float version;
 };
 
 struct Config {
@@ -76,5 +79,4 @@ struct Config {
     int n_servers;
     vector<DatabaseData> dataBase;
     vector<vector<vector<Operation>>> all_operations;
-    vector<vector<Operation>> my_operations;
 };

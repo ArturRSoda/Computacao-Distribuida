@@ -1,5 +1,5 @@
 n_clients: 4
-n_servers: 5
+n_servers: 2
 
 data_base:
     - x 1 0.0

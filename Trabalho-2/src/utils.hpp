@@ -5,6 +5,9 @@
 
 using namespace std;
 
+DatabaseData get_db_var(string var_name, vector<DatabaseData>* db);
+void set_db_value(string var_name, float value, vector<DatabaseData>* db);
+void add_db_version(string var_name, vector<DatabaseData>* db);
 void print(Header* header);
 void print(MessageRequestRead* rr);
 void print(MessageResponseRead* rr);

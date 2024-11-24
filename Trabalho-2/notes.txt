@@ -49,8 +49,12 @@ Codigo {
 
     TODO {
         [Artur: Feito] Arquivo de configuracao (feito)
-        [] Simular a transacao
-        [] Implementar banco de dados
+        [Artur: falta coisa] Simular a transacao cliente {
+            falta difucao atomica,
+            ainda nao esta considerando tempo.
+        }
+        [Artur: Feito] Simular a transacao servidor
+        [Artur: Feito] Implementar banco de dados
         [] Commit: difusao atomica
         [] [Opcional] melhorar operacoes do write (+, -, *, /)
     }
