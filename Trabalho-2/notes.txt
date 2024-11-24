@@ -113,31 +113,35 @@ Codigo {
 }
 
 Arquivos de configuracao {
-    Banco de dados {
-        x 0 0
-        y 2 0
-        z 3 0
-    }
-    Servidor {
-        server_id 3
-    }
-    Cliente {
-        client_id 3
+    n_clients: 3
+    n_servers: 4
 
-        transaction_start
-        read x
-        write y x
-        read z
-        write z x + y
-        transaction_end
+    data_base:
+        - variable_name ; value ; version
+        - x 1 0.0
+        - y 2 1.0
+        - z 3 2.0
+    end
 
-        time 3
+    # Numero de definicoes de operacoes deve ser de acordo com numero de clientes
+    client_op:
+        - read ; name ; version ; time
+        - write ; name ; value ; time
+        - read x 0.0 10
+        - write y 10 20
+        - read z 0.0 30
+    end
 
-        transaction_start
-        read x
-        write y x
-        read z
-        write z x * y
-        transaction_end
-    }
+    client_op:
+        - write z 20 40
+        - read x 1.0 50
+    end
+
+    client_op:
+        - read x 2.0 60
+        - write x 30 70
+    end
+
+    client_op:
+    end
 }
