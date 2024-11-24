@@ -40,7 +40,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    /*
     MessageRequestRead rr;
     rr.header.type = request_read;
     rr.client_id = 123;
@@ -50,22 +49,19 @@ int main(int argc, char **argv) {
     cout << s << endl;
 
     rr = unserialize_MessageRequestRead(&s);
-    cout << rr.header.type << " " << rr.client_id << " " << rr.variable_name << endl;
-    */
+    print(&rr);
 
-    /*
-    MessageResponseRead rr;
-    rr.value = 123;
-    rr.version = "1.0";
+    MessageResponseRead mrr;
+    mrr.header.type = response_read;
+    mrr.value = 123;
+    mrr.version = "1.0";
 
-    string s = serialize_MessageResponseRead(&rr);
+    s = serialize_MessageResponseRead(&mrr);
     cout << s << endl;
 
-    rr = unserialize_MessageResponseRead(&s);
-    cout << rr.value << " " << rr.version << endl;
-    */
+    mrr = unserialize_MessageResponseRead(&s);
+    print(&mrr);
 
-    /*
     MessageRequestCommit rc;
     rc.header.type = request_read;
     rc.client_id = 1;
@@ -75,31 +71,20 @@ int main(int argc, char **argv) {
     rc.ws.push_back(WriteOp{"y", 4});
     rc.ws.push_back(WriteOp{"z", 6});
 
-    string s;
     s = serialize_MessageRequestCommit(&rc);
     cout << s << endl;
-    rc = unserialize_MessageRequestCommit(&s);
     cout << endl;
-    cout << rc.header.type << endl;
-    cout << rc.client_id << endl;
-    cout << rc.transaction_id << endl;
-    for (auto x : rc.rs) {
-        cout << x.variable_name << " " << x.value << " " << x.version << endl;
-    }
-    for (auto x : rc.ws) {
-        cout << x.variable_name << " " << x.value << endl;
-    }
-    */
+    rc = unserialize_MessageRequestCommit(&s);
+    print(&rc);
 
-    /*
-    MessageResponseCommit rc;
-    rc.status = 1;
-    rc.transaction_id = 3;
-    string s = serialize_MessageResponseCommit(&rc);
+    MessageResponseCommit mrc;
+    mrc.header.type = response_commit;
+    mrc.status = 1;
+    mrc.transaction_id = 3;
+    s = serialize_MessageResponseCommit(&mrc);
     cout << s << endl;
-    rc = unserialize_MessageResponseCommit(&s);
-    cout << rc.status << " " << rc.transaction_id << endl;
-    */
+    mrc = unserialize_MessageResponseCommit(&s);
+    print(&mrc);
 
     return 0;
 }

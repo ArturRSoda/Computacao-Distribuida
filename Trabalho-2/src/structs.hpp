@@ -5,14 +5,16 @@
 
 using namespace std;
 
-enum RequestType {
+enum HeaderType {
     request_read,
-    request_commit
+    response_read,
+    request_commit,
+    response_commit,
 };
 
 
-struct RequestHeader {
-    RequestType type;
+struct Header {
+    HeaderType type;
 };
 
 
@@ -36,18 +38,19 @@ struct WriteOp {
 };
 
 struct MessageRequestRead {
-    RequestHeader header;
+    Header header;
     int client_id;
     string variable_name;
 };
 
 struct MessageResponseRead {
+    Header header;
     float value;
     string version;
 };
 
 struct MessageRequestCommit {
-    RequestHeader header;
+    Header header;
     int client_id;
     int transaction_id;
     vector<ReadOp> rs;
@@ -55,6 +58,7 @@ struct MessageRequestCommit {
 };
 
 struct MessageResponseCommit {
+    Header header;
     int status;
     int transaction_id;
 };
