@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cassert>
 #include <assert.h>
+#include <iomanip>
 
 #include <arpa/inet.h>
 
@@ -498,3 +499,27 @@ void read_config(Config* config) {
     }
 }
 
+timespec my_get_time() {
+    timespec curr_time;
+    timespec_get(&curr_time, TIME_UTC);
+    return curr_time;
+}
+
+int64_t get_elapsed_time_ms(timespec* initial_time) {
+    double sec_to_milli = 1000.0;
+    double nsec_to_milli = 1.0 / 1000000.0;
+
+    timespec curr_time = my_get_time();
+
+    int64_t elapsed_time =
+        sec_to_milli * (curr_time.tv_sec - initial_time->tv_sec) +
+        nsec_to_milli * (curr_time.tv_nsec - initial_time->tv_nsec);
+
+    return elapsed_time;
+}
+
+void print_time_sec(timespec* initial_time) {
+    int64_t elapsed_time = get_elapsed_time_ms(initial_time);
+
+    cout << "[" << setfill('0') << setw(4) << elapsed_time / 1000 << "." << setfill('0') << setw(3) << elapsed_time % 1000 << "] ";
+}

@@ -36,4 +36,7 @@ void general_send(int this_socket, in_addr_t ip, uint16_t port, string* message)
 void tcp_send(int this_socket, in_addr_t ip, uint16_t port, string* message);
 void udp_send(int this_socket, in_addr_t ip, uint16_t port, string* message);
 void read_config(Config* config);
+timespec my_get_time();
+int64_t get_elapsed_time_ms(timespec* initial_time);
+void print_time_sec(timespec* initial_time);
 

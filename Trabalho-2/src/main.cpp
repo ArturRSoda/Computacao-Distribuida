@@ -1,14 +1,16 @@
 #include <cstdio>
 #include <cstdlib>
-#include <sstream>
 #include <cassert>
 #include <cstdint>
-#include <iostream>
-#include <netinet/in.h>
-#include <poll.h>
-#include <iostream>
 #include <cstring>
+#include <ctime>
+#include <cstdint>
+
+#include <sstream>
+#include <iostream>
 #include <vector>
+
+#include <netinet/in.h>
 #include <poll.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -19,6 +21,9 @@
 using namespace std;
 
 void client_func(int n_servers, int id, vector<vector<Operation>> my_operations) {
+    timespec initial_time = my_get_time();
+
+    print_time_sec(&initial_time);
     cout << "clientORserver = client" << endl;
     cout << "my_id: " << id << endl;
     cout << "my_operations:" << endl;
@@ -30,7 +35,7 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
                 cout << x.value << " ";
             }
             cout << x.time << endl;
- }
+        }
     }
 
     int my_socket;
@@ -40,32 +45,55 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
     // Randomly select a server
     int server_id = rand() % n_servers;
+    print_time_sec(&initial_time);
     cout << "server to connect: " << server_id << endl;
 
     my_socket = tcp_create_socket();
+    print_time_sec(&initial_time);
     cout << "tcp socket created successfully" << endl;
 
     uint16_t port = 1000 + (server_id+1)*100;
     if (tcp_connect(my_socket, INADDR_ANY, port)) {
+        print_time_sec(&initial_time);
         cout << "client connected with server " << server_id << " successfully!" << endl;
     } else {
+        print_time_sec(&initial_time);
         cout << "tcp connection failed" << endl;
     }
 
     cout << endl;
 
-    /* AINDA NAO CONSIDERA O TEMPO DAS OPERACOES */
     for (auto transaction : my_operations) {
         int transaction_id = rand() % 10000;
+        print_time_sec(&initial_time);
         cout << "Transaction ID: " << transaction_id << endl;
 
         for (auto op : transaction) {
+            /* NOTE(felipe): wait for operation time */ {
+                double sec_to_milli = 1000.0;
+                double nsec_to_milli = 1.0 / 1000000.0;
+
+                int64_t elapsed_time = get_elapsed_time_ms(&initial_time);
+
+                if (elapsed_time < op.time) {
+                    int64_t sleep_time_ms = op.time - elapsed_time;
+                    int64_t seconds = sleep_time_ms / sec_to_milli;
+                    int64_t nanoseconds = (sleep_time_ms % (int64_t)sec_to_milli) / nsec_to_milli;
+                    timespec sleep_time = {};
+                    sleep_time.tv_sec = seconds;
+                    sleep_time.tv_nsec = nanoseconds;
+                    nanosleep(&sleep_time, 0);
+                }
+            }
+
             if (op.type == "write") {
+                print_time_sec(&initial_time);
                 cout << "- write " << op.variable_name << " " << op.value << endl;
                 ws.push_back(WriteOp{op.variable_name, op.value});
                 cout << "variable " << op.variable_name << " added to ws" << endl << endl;
             }
             else if (op.type == "read") {
+                print_time_sec(&initial_time);
                 cout << "- read " << op.variable_name << endl;
 
                 bool already_in = false;
@@ -100,6 +128,7 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
                         assert(ht == response_read);
 
                         MessageResponseRead response = unserialize_MessageResponseRead(&message);
+                        print_time_sec(&initial_time);
                         cout << "Client received:" << endl;
                         print(&response);
 
@@ -110,6 +139,7 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
             }
         }
 
+        print_time_sec(&initial_time);
         cout << "End of Transaction " << transaction_id << endl << endl;
 
         /* TODO  fazer difusao atomica */
@@ -121,6 +151,9 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
 
 void server_func(int id, vector<DatabaseData> dataBase) {
+    timespec initial_time = my_get_time();
+
+    print_time_sec(&initial_time);
     cout << "clientORserver = client" << endl;
     cout << "my_id: " << id << endl;
     cout << "Database:" << endl;
@@ -148,6 +181,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
     while (true) {
         int poll_count = poll(fds.data(), fds.size(), -1);
         if (poll_count < 0) {
+            print_time_sec(&initial_time);
             perror("Poll error");
             break;
         }
@@ -160,6 +194,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                     in_addr_t client_ip;
 
                     client_socket = tcp_accept(my_socket, &client_ip);
+                    print_time_sec(&initial_time);
                     cout << "Server accepted a connection" << endl;
 
                     fds.push_back({client_socket, POLLIN, 0});
@@ -173,6 +208,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                         int ht;
                         ss >> ht;
 
+                        print_time_sec(&initial_time);
                         cout << "received something" << endl;
 
                         if (ht == request_read) {
@@ -193,6 +229,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                             string response_str = serialize_MessageResponseRead(&response);
                             send(fds[i].fd, response_str.c_str(), response_str.size(), 0);
 
+                            print_time_sec(&initial_time);
                             cout << "server sent: " << endl;
                             print(&response);
                         }
@@ -228,12 +265,14 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                             string response_str = serialize_MessageResponseCommit(&response);
                             send(fds[i].fd, response_str.c_str(), response_str.size(), 0);
 
+                            print_time_sec(&initial_time);
                             cout << "server sent: " << endl;
                             print(&response);
                         }
 
                     }
                     else {
+                        print_time_sec(&initial_time);
                         cout << "Client disconnected" << endl;
                         close(fds[i].fd);
                         fds.erase(fds.begin() + i);
@@ -248,7 +287,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
 }
 
 int main(int argc, char **argv) {
-    assert(argc >= 2);
+    assert(argc == 3);
 
     Config config;
     config.clientORserver = argv[1];

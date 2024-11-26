@@ -1,4 +1,4 @@
-FLAGS=-Wall -Wextra -Wno-unused-label -Wno-sign-compare
+FLAGS=-Wall -Wextra -Wno-unused-label -Wno-sign-compare -g
 
 .PHONY: all
 
