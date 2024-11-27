@@ -48,10 +48,10 @@ Codigo {
     }
 
     TODO {
-        [Artur: Feito] Arquivo de configuracao (feito)
+        [Artur: Feito] Arquivo de configuracao
         [Artur: falta coisa] Simular a transacao cliente {
-            falta difucao atomica,
-            ainda nao esta considerando tempo.
+            Adicionar difucao atomica
+            [Felipe: feito] Considerar tempo das transacoes
         }
         [Artur: Feito] Simular a transacao servidor
         [Artur: Feito] Implementar banco de dados
