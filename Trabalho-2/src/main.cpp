@@ -166,17 +166,27 @@ void server_func(int id, vector<DatabaseData> dataBase) {
         dataBase[i].version = 0.0;
     }
 
-    int my_socket;
     uint16_t tcp_port = 1000 + (id+1)*100;
     char buffer[packet_max_size] = {0};
 
+    int client_socket;
+    client_socket = tcp_create_socket();
+    tcp_bind(client_socket, INADDR_ANY, tcp_port);
+    tcp_listen(client_socket);
 
-    my_socket = tcp_create_socket();
-    tcp_bind(my_socket, INADDR_ANY, tcp_port);
-    tcp_listen(my_socket);
+    int sequencer_socket;
+    sequencer_socket = tcp_create_socket();
+    tcp_bind(sequencer_socket, INADDR_ANY, tcp_port);
+    tcp_listen(sequencer_socket);
+
+    if (tcp_connect(sequencer_socket, INADDR_ANY, 42000)) {
+        cout << "server connected with sequencer successfully!" << endl;
+    } else {
+        cout << "server sequencer tcp connection failed" << endl;
+    }
 
     vector<pollfd> fds;
-    fds.push_back({my_socket, POLLIN, 0});
+    fds.push_back({client_socket, POLLIN, 0});
 
     while (true) {
         int poll_count = poll(fds.data(), fds.size(), -1);
@@ -188,16 +198,67 @@ void server_func(int id, vector<DatabaseData> dataBase) {
 
         for (size_t i = 0; i < fds.size(); ++i) {
             if (fds[i].revents & POLLIN) {
-                if (fds[i].fd == my_socket) {
+                if (fds[i].fd == client_socket) {
                     // New connection
                     int client_socket;
                     in_addr_t client_ip;
 
-                    client_socket = tcp_accept(my_socket, &client_ip);
+                    client_socket = tcp_accept(client_socket, &client_ip);
                     print_time_sec(&initial_time);
                     cout << "Server accepted a connection" << endl;
 
                     fds.push_back({client_socket, POLLIN, 0});
+                }
+                else if (fds[i].fd == sequencer_socket) {
+                    int valread = read(fds[i].fd, buffer, packet_max_size);
+                    if (valread > 0) {
+                        string message = buffer;
+                        stringstream ss(buffer);
+                        int ht;
+                        ss >> ht;
+
+                        print_time_sec(&initial_time);
+                        cout << "received something" << endl;
+                        
+                        // request commit
+                        assert (ht == request_commit);
+                        MessageRequestCommit request = unserialize_MessageRequestCommit(&message);
+                        cout << "server received: " << endl;
+                        print(&request);
+
+                        bool abort = false;
+                        for (auto read_op : request.rs) {
+                            DatabaseData data = get_db_var(read_op.variable_name, &dataBase);
+
+                            if (data.version > read_op.version) {
+                                abort = true;
+                                break;
+                            }
+                        }
+
+                        if (!abort) {
+                            lastCommitted++;
+                            for (auto write_op : request.ws) {
+                                add_db_version(write_op.variable_name, &dataBase);
+                                set_db_value(write_op.variable_name, write_op.value, &dataBase);
+                            }
+                        }
+
+                        MessageResponseCommit response {
+                            Header {response_commit},
+                                   !abort,
+                                   request.transaction_id
+                        };
+
+                        string response_str = serialize_MessageResponseCommit(&response);
+                        send(fds[i].fd, response_str.c_str(), response_str.size(), 0);
+
+                        print_time_sec(&initial_time);
+                        cout << "server sent: " << endl;
+                        print(&response);
+
+                    }
+
                 }
                 else {
                     // Incoming data
@@ -234,40 +295,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                             print(&response);
                         }
                         else if (ht == request_commit) {
-                            MessageRequestCommit request = unserialize_MessageRequestCommit(&message);
-                            cout << "server received: " << endl;
-                            print(&request);
-
-                            bool abort = false;
-                            for (auto read_op : request.rs) {
-                                DatabaseData data = get_db_var(read_op.variable_name, &dataBase);
-
-                                if (data.version > read_op.version) {
-                                    abort = true;
-                                    break;
-                                }
-                            }
-
-                            if (!abort) {
-                                lastCommitted++;
-                                for (auto write_op : request.ws) {
-                                    add_db_version(write_op.variable_name, &dataBase);
-                                    set_db_value(write_op.variable_name, write_op.value, &dataBase);
-                                }
-                            }
-
-                            MessageResponseCommit response {
-                                Header {response_commit},
-                                !abort,
-                                request.transaction_id
-                            };
-
-                            string response_str = serialize_MessageResponseCommit(&response);
-                            send(fds[i].fd, response_str.c_str(), response_str.size(), 0);
-
-                            print_time_sec(&initial_time);
-                            cout << "server sent: " << endl;
-                            print(&response);
+                            send(sequencer_socket, message.c_str(), message.size(), 0);
                         }
 
                     }
@@ -282,8 +310,78 @@ void server_func(int id, vector<DatabaseData> dataBase) {
         }
     }
 
-    close(my_socket);
+    close(client_socket);
 
+}
+
+void sequencer() {
+    char buffer[packet_max_size] = {0};
+
+    int request_socket;
+    uint16_t tcp_port1 = 42000;
+    request_socket = tcp_create_socket();
+    tcp_bind(request_socket, INADDR_ANY, tcp_port1);
+    tcp_listen(request_socket);
+
+    int response_socket;
+    uint16_t tcp_port2 = 43000;
+    response_socket = tcp_create_socket();
+    tcp_bind(response_socket, INADDR_ANY, tcp_port2);
+    tcp_listen(response_socket);
+
+    vector<pollfd> fds;
+    fds.push_back({request_socket, POLLIN, 0});
+    vector<int> servers_sockets;
+
+    while (true) {
+        int poll_count = poll(fds.data(), fds.size(), -1);
+        if (poll_count < 0) {
+            perror("Poll error");
+            break;
+        }
+
+        for (size_t i = 0; i < fds.size(); ++i) {
+            if (fds[i].revents & POLLIN) {
+                if (fds[i].fd == request_socket) {
+                    // New connection
+                    int server_socket;
+                    in_addr_t server_ip;
+
+                    server_socket = tcp_accept(request_socket, &server_ip);
+                    cout << "Sequencer accepted a connection" << endl;
+
+                    fds.push_back({server_socket, POLLIN, 0});
+                    servers_sockets.push_back(server_socket);
+                }
+                else {
+                    int valread = read(fds[i].fd, buffer, packet_max_size);
+                    if (valread > 0) {
+                        string message = buffer;
+                        stringstream ss(buffer);
+                        int ht;
+                        ss >> ht;
+
+                        cout << "received something" << endl;
+
+                        if (ht == request_commit) {
+                            for (int socket : servers_sockets) {
+                                send(socket, message.c_str(), message.size(), 0); 
+                            }
+                        }
+                        else if (ht == response_commit) {
+                            while (true) {
+                                int poll_count = poll(fds.data(), fds.size(), -1);
+                                if (poll_count < 0) {
+                                    perror("Poll error");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 int main(int argc, char **argv) {
