@@ -5,8 +5,6 @@
 
 using namespace std;
 
-constexpr int packet_max_size = 4096;
-
 enum HeaderType {
     request_read,
     response_read,
@@ -65,6 +63,13 @@ struct MessageResponseCommit {
     int status;
     int transaction_id;
 };
+
+
+struct ServerCommitRequests {
+    MessageRequestCommit package;
+    int fds_index;
+};
+
 
 struct DatabaseData {
     string variable_name;

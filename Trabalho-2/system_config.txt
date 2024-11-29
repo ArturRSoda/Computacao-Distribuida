@@ -3,8 +3,8 @@ n_servers: 2
 
 data_base:
     - x 1 0.0
-    - y 2 1.0
-    - z 3 2.0
+    - y 2 0.0
+    - z 3 0.0
 end
 
 client_op:
