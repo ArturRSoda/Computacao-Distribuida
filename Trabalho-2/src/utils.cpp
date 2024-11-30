@@ -106,6 +106,7 @@ string serialize_MessageRequestRead(MessageRequestRead* request) {
     s += " ";
     s += request->variable_name;
     s += '\n';
+    s += '$';
 
     return s;
 }
@@ -140,6 +141,7 @@ string serialize_MessageResponseRead(MessageResponseRead* response) {
     s += " ";
     s += to_string(response->version);
     s += '\n';
+    s += '$';
 
     return s;
 }
@@ -194,6 +196,7 @@ string serialize_MessageRequestCommit(MessageRequestCommit* request) {
         s += '\n';
     }
     s += ">\n";
+    s += '$';
 
     return s;
 }
@@ -259,6 +262,7 @@ string serialize_MessageResponseCommit(MessageResponseCommit* response) {
     s += " ";
     s += to_string(response->transaction_id);
     s += '\n';
+    s += '$';
 
     return s;
 }

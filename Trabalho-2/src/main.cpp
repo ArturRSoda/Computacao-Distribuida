@@ -10,6 +10,7 @@
 #include <sstream>
 #include <iostream>
 #include <sys/poll.h>
+#include <unordered_map>
 #include <vector>
 
 #include <netinet/in.h>
@@ -57,19 +58,16 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
     cout << "tcp socket created successfully" << endl;
 
     uint16_t port = SERVER_BASE_PORT + server_id*100;
-    if (tcp_connect(my_socket, INADDR_ANY, port)) {
-        print_time_sec(&initial_time);
+    print_time_sec(&initial_time);
+    if (tcp_connect(my_socket, INADDR_ANY, port))
         cout << "Server connected with server " << server_id << " successfully!" << endl;
-    } else {
-        print_time_sec(&initial_time);
+    else
         cout << "tcp connection failed" << endl;
-    }
-
     cout << endl;
 
     int next_transaction_sub_id = 0;
     for (auto transaction : my_operations) {
-        int transaction_id = next_transaction_sub_id * 100 + id;
+        int transaction_id = id*100 + next_transaction_sub_id;
         next_transaction_sub_id++;
 
         bool status = true;
@@ -114,45 +112,55 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
                 for (auto wp : ws) {
                     if (wp.variable_name == op.variable_name) {
                         already_in = true;
+                        print_time_sec(&initial_time);
                         cout << "- Variable is already in ws vector" << endl << endl;
                         break;
                     }
                 }
 
-                if (!already_in) {
-                    MessageRequestRead request {
-                        Header{request_read},
-                        id,
-                        op.variable_name
-                    };
+                if (already_in) continue;
 
-                    string request_str = serialize_MessageRequestRead(&request);
-                    send(my_socket, request_str.c_str(), request_str.size(), 0);
-                    cout << "Client sent request to read: " << endl;
-                    print(&request);
+                MessageRequestRead request {
+                    Header{request_read},
+                    id,
+                    op.variable_name
+                };
 
-                     // Receive a response
-                    int valread = read(my_socket, buffer, PACKET_MAX_SIZE);
-                    if (valread > 0) {
-                        string message = buffer;
-                        stringstream ss(buffer);
-                        int ht;
-                        ss >> ht;
-                        assert(ht == response_read);
+                string request_str = serialize_MessageRequestRead(&request);
+                send(my_socket, request_str.c_str(), request_str.size(), 0);
 
-                        MessageResponseRead response = unserialize_MessageResponseRead(&message);
-                        print_time_sec(&initial_time);
-                        cout << "Client read response:" << endl;
-                        print(&response);
+                print_time_sec(&initial_time);
+                cout << "Client sent request to read: " << endl;
+                print(&request);
 
-                        rs.push_back(ReadOp{response.variable_name, response.value, response.version});
-                        cout << "variable " << response.variable_name << " added to rs" << endl << endl;
-                    }
+                    // Receive a response
+                int valread = read(my_socket, buffer, PACKET_MAX_SIZE);
+                if (valread <= 0) {
+                    print_time_sec(&initial_time);
+                    cout << "Nothing was read" << endl;
+                    continue;
                 }
+
+                string message = buffer;
+                stringstream ss(buffer);
+                int ht;
+                ss >> ht;
+
+                assert(ht == response_read);
+
+                MessageResponseRead response = unserialize_MessageResponseRead(&message);
+
+                print_time_sec(&initial_time);
+                cout << "Client read response:" << endl;
+                print(&response);
+
+                rs.push_back(ReadOp{response.variable_name, response.value, response.version});
+                cout << "variable " << response.variable_name << " added to rs" << endl << endl;
             }
         }
 
         if (!ws.empty()) {
+            // send request commit
             print_time_sec(&initial_time);
             cout << "Sending commit to server" << endl;
 
@@ -171,26 +179,28 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
             // Receive  response
             int valread = read(my_socket, buffer, PACKET_MAX_SIZE);
-            if (valread > 0) {
-                string message = buffer;
-                stringstream ss(buffer);
-                int ht;
-                ss >> ht;
-                assert(ht == response_commit);
-
-                MessageResponseCommit response = unserialize_MessageResponseCommit(&message);
+            if (valread <= 0) {
                 print_time_sec(&initial_time);
-                cout << "Client received the commit response:" << endl;
-                print(&response);
+                cout << "Nothing was read" << endl;
+                continue;
+            }
 
-                status = response.status;
-                if (!response.status) {
-                    print_time_sec(&initial_time);
-                    cout << "The transaction was aborted!" << endl;
+            string message = buffer;
+            stringstream ss(buffer);
+            int ht;
+            ss >> ht;
 
-                    /* TODO - O QUE FAZER SE TRANSICAO FOR ABORDATA */
+            assert(ht == response_commit);
 
-                }
+            MessageResponseCommit response = unserialize_MessageResponseCommit(&message);
+            print_time_sec(&initial_time);
+            cout << "Client received the commit response:" << endl;
+            print(&response);
+
+            status = response.status;
+            if (!response.status) {
+                print_time_sec(&initial_time);
+                cout << "The transaction was aborted!" << endl;
             }
 
             print_time_sec(&initial_time);
@@ -210,13 +220,11 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
         print_time_sec(&initial_time);
         cout << "Transaction ended ";
-        if (status) {
+        if (status)
             cout << "with success!" << endl;
-        } else {
+        else
             cout << "with fail" << endl;
-        }
     }
-
     close(my_socket);
 }
 
@@ -249,13 +257,11 @@ void server_func(int id, vector<DatabaseData> dataBase) {
     print_time_sec(&initial_time);
     cout << "tcp socket created successfully" << endl;
 
-    if (tcp_connect(sequencer_socket, INADDR_ANY, SEQUENCER_PORT)) {
-        print_time_sec(&initial_time);
+    print_time_sec(&initial_time);
+    if (tcp_connect(sequencer_socket, INADDR_ANY, SEQUENCER_PORT))
         cout << "Server connected with sequencer successfully!" << endl << endl;
-    } else {
-        print_time_sec(&initial_time);
+    else
         cout << "tcp connection failed" << endl;
-    }
 
     vector<ProcessingCommitRequests> requests_to_respond;
 
@@ -263,6 +269,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
     fds.push_back({client_socket, POLLIN, 0});
     fds.push_back({sequencer_socket, POLLIN, 0});
 
+    string tcp_buffer = "";
     while (true) {
         int poll_count = poll(fds.data(), fds.size(), -1);
         if (poll_count < 0) {
@@ -285,15 +292,28 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                     fds.push_back({new_client_socket, POLLIN, 0});
                 }
                 else if (fds[i].fd == sequencer_socket) {
-                    // receive broadcast from sequencer
                     int valread = read(fds[i].fd, buffer, PACKET_MAX_SIZE);
-                    if (valread > 0) {
-                        string message = buffer;
-                        stringstream ss(buffer);
+                    if (valread <= 0) {
+                        print_time_sec(&initial_time);
+                        cout << "Nothing was read" << endl;
+                        continue;
+                    }
+
+                    tcp_buffer.append(buffer, valread);
+
+                    while (true) {
+                        int end_of_package = tcp_buffer.find('$');
+                        if (end_of_package == string::npos)
+                            break; // already read all availables pakages
+
+                        string message = tcp_buffer.substr(0, end_of_package);
+                        tcp_buffer.erase(0, end_of_package+1);
+
+                        stringstream ss(message);
                         int ht;
                         ss >> ht;
 
-                        // request commit
+                        // receive broadcast from sequencer
                         if (ht == request_commit) {
                             MessageRequestCommit request = unserialize_MessageRequestCommit(&message);
 
@@ -350,67 +370,66 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                                     break;
                                 }
                             }
-
                         }
                     }
-
                 }
                 else {
                     // Request read or request commit from client
                     int valread = read(fds[i].fd, buffer, PACKET_MAX_SIZE);
-                    if (valread > 0) {
-                        string message = buffer;
-                        stringstream ss(buffer);
-                        int ht;
-                        ss >> ht;
 
-                        if (ht == request_read) {
-                            MessageRequestRead request = unserialize_MessageRequestRead(&message);
-
-                            print_time_sec(&initial_time);
-                            cout << "Server a read request from client: " << endl;
-                            print(&request);
-
-                            DatabaseData data = get_db_var(request.variable_name, &dataBase);
-
-                            MessageResponseRead response {
-                                Header{response_read},
-                                    data.variable_name,
-                                    data.value,
-                                    data.version
-                            };
-
-                            string response_str = serialize_MessageResponseRead(&response);
-                            send(fds[i].fd, response_str.c_str(), response_str.size(), 0);
-
-                            print_time_sec(&initial_time);
-                            cout << "Server respond the read request: " << endl;
-                            print(&response);
-                        }
-
-                        else if (ht == request_commit) {
-                            MessageRequestCommit req_package = unserialize_MessageRequestCommit(&message);
-
-                            print_time_sec(&initial_time);
-                            cout << "Server commit request from the client. " << endl;
-                            print_time_sec(&initial_time);
-                            cout << "Passing to the sequencer." << endl;
-                            send(sequencer_socket, message.c_str(), message.size(), 0);
-                            print(&req_package);
-
-                            ProcessingCommitRequests req {
-                                req_package,
-                                i
-                            };
-                            requests_to_respond.push_back(req);
-                        }
-
-                    }
-                    else {
+                    if (valread <= 0) {
+                        // client disconnected
                         print_time_sec(&initial_time);
                         cout << "Client disconnected" << endl;
                         close(fds[i].fd);
                         fds.erase(fds.begin() + i);
+                        continue;
+                    }
+
+                    string message = buffer;
+                    stringstream ss(buffer);
+                    int ht;
+                    ss >> ht;
+
+                    if (ht == request_read) {
+                        MessageRequestRead request = unserialize_MessageRequestRead(&message);
+
+                        print_time_sec(&initial_time);
+                        cout << "Server a read request from client: " << endl;
+                        print(&request);
+
+                        DatabaseData data = get_db_var(request.variable_name, &dataBase);
+
+                        MessageResponseRead response {
+                            Header{response_read},
+                                data.variable_name,
+                                data.value,
+                                data.version
+                        };
+
+                        string response_str = serialize_MessageResponseRead(&response);
+                        send(fds[i].fd, response_str.c_str(), response_str.size(), 0);
+
+                        print_time_sec(&initial_time);
+                        cout << "Server respond the read request: " << endl;
+                        print(&response);
+                    }
+
+                    else if (ht == request_commit) {
+                        MessageRequestCommit req_package = unserialize_MessageRequestCommit(&message);
+
+                        print_time_sec(&initial_time);
+                        cout << "Server commit request from the client. " << endl;
+                        print_time_sec(&initial_time);
+                        cout << "Passing to the sequencer." << endl;
+                        send(sequencer_socket, message.c_str(), message.size(), 0);
+                        print(&req_package);
+
+                        ProcessingCommitRequests req {
+                            req_package,
+                            i
+                        };
+                        requests_to_respond.push_back(req);
                     }
                 }
             }
@@ -433,10 +452,12 @@ void sequencer_func() {
     vector<int> servers_sockets;
 
     queue<ProcessingCommitRequests> commit_queue;
+    unordered_map<int, string> tcp_buffers;
 
     while (true) {
-        int poll_count = poll(fds.data(), fds.size(), -1);
+        int poll_count = poll(fds.data(), fds.size(), 100);
         if (poll_count < 0) {
+            print_time_sec(&initial_time);
             perror("Poll error");
             break;
         }
@@ -454,17 +475,36 @@ void sequencer_func() {
 
                     fds.push_back({server_socket, POLLIN, 0});
                     servers_sockets.push_back(server_socket);
+                    tcp_buffers[server_socket] = "";
                 }
                 else {
                     int valread = read(fds[i].fd, buffer, PACKET_MAX_SIZE);
-                    if (valread > 0) {
-                        string message = buffer;
-                        stringstream ss(buffer);
+                    if (valread <= 0) {
+                        print_time_sec(&initial_time);
+                        cout << "Server disconnected" << endl;
+
+                        close(fds[i].fd);
+                        tcp_buffers.erase(fds[i].fd);
+                        fds.erase(fds.begin() + i);
+                        i--;
+                        continue;
+                    }
+
+                    tcp_buffers[fds[i].fd].append(buffer, valread);
+
+                    while (!tcp_buffers[fds[i].fd].empty()) {
+                        int end_of_package = tcp_buffers[fds[i].fd].find('$');
+                        if (end_of_package == string::npos)
+                            break; // already read all availables pakages
+
+                        string message = tcp_buffers[fds[i].fd].substr(0, end_of_package);
+                        tcp_buffers[fds[i].fd].erase(0, end_of_package+1);
+
+                        stringstream ss(message);
                         int ht;
                         ss >> ht;
 
-                        assert(ht == request_commit);
-
+                        assert (ht == request_commit);
                         MessageRequestCommit package = unserialize_MessageRequestCommit(&message);
 
                         print_time_sec(&initial_time);
@@ -482,7 +522,10 @@ void sequencer_func() {
         }
 
         // Process commit queue if not empty
-        while (!commit_queue.empty()) {
+        while (true) {
+            if (commit_queue.empty())
+                break;
+
             ProcessingCommitRequests commit_to_broadcast = commit_queue.front();
             commit_queue.pop();
 
@@ -500,23 +543,46 @@ void sequencer_func() {
             vector<MessageResponseCommit> responses;
             int responses_needed = servers_sockets.size();
             while (responses.size() < responses_needed) {
-                int poll_count = poll(fds.data(), fds.size(), -1);
+                int poll_count = poll(fds.data(), fds.size(), 5000);
                 if (poll_count < 0) {
+                    print_time_sec(&initial_time);
                     perror("Poll error");
+                    break;
+                } else if (poll_count == 0) {
+                    print_time_sec(&initial_time);
+                    cout << "Timeout while waiting for responses" << endl;
                     break;
                 }
 
                 for (size_t i = 0; i < fds.size(); ++i) {
                     if (fds[i].revents & POLLIN) {
                         int valread = read(fds[i].fd, buffer, PACKET_MAX_SIZE);
-                        if (valread > 0) {
-                            string response_message = buffer;
+                        if (valread <= 0) {
+                            print_time_sec(&initial_time);
+                            cout << "Nothing was read" << endl;
+                            continue;
+                        }
+
+                        tcp_buffers[fds[i].fd].append(buffer, valread);
+
+                        while (!tcp_buffers[fds[i].fd].empty()) {
+                            int end_of_package = tcp_buffers[fds[i].fd].find('$');
+                            if (end_of_package == string::npos)
+                                break; // already read all availables pakages
+
+                            string response_message = tcp_buffers[fds[i].fd].substr(0, end_of_package);
+                            tcp_buffers[fds[i].fd].erase(0, end_of_package+1);
+
                             stringstream ss(response_message);
                             int ht;
                             ss >> ht;
 
                             if (ht == response_commit) {
                                 MessageResponseCommit response = unserialize_MessageResponseCommit(&response_message);
+
+                                print_time_sec(&initial_time);
+                                cout << "Received commit response from server " << i-1 << endl << endl;
+
                                 responses.push_back(response);
                             }
                             else if (ht == request_commit) {
@@ -563,6 +629,7 @@ void sequencer_func() {
             print_time_sec(&initial_time);
             cout << "Sequencer sent final commit response to server" << endl;
             print(&final_response);
+
         }
     }
     close(my_socket);
