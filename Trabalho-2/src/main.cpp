@@ -67,8 +67,11 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
     cout << endl;
 
+    int next_transaction_sub_id = 0;
     for (auto transaction : my_operations) {
-        int transaction_id = (rand() % 10000)*100 + id;
+        int transaction_id = next_transaction_sub_id * 100 + id;
+        next_transaction_sub_id++;
+
         bool status = true;
         vector<WriteOp> ws = {};
         vector<ReadOp> rs = {};
@@ -206,7 +209,7 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
         }
 
         print_time_sec(&initial_time);
-        cout << "Trasaction ended ";
+        cout << "Transaction ended ";
         if (status) {
             cout << "with success!" << endl;
         } else {
@@ -282,7 +285,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                     fds.push_back({new_client_socket, POLLIN, 0});
                 }
                 else if (fds[i].fd == sequencer_socket) {
-                    // receive breadcast from sequncer
+                    // receive broadcast from sequencer
                     int valread = read(fds[i].fd, buffer, PACKET_MAX_SIZE);
                     if (valread > 0) {
                         string message = buffer;
@@ -479,7 +482,7 @@ void sequencer_func() {
         }
 
         // Process commit queue if not empty
-        if (!commit_queue.empty()) {
+        while (!commit_queue.empty()) {
             ProcessingCommitRequests commit_to_broadcast = commit_queue.front();
             commit_queue.pop();
 
@@ -567,6 +570,8 @@ void sequencer_func() {
 
 int main(int argc, char **argv) {
     assert(argc >= 2);
+
+    srand(time(0));
 
     Config config;
     config.clientORserver = argv[1];

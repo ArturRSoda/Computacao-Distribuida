@@ -1,0 +1,24 @@
+n_clients: 1
+n_servers: 2
+
+data_base:
+    - x 1 0.0
+    - y 2 0.0
+    - z 3 0.0
+end
+
+client_op:
+    transaction:
+        - read x 1000
+        - write y 10 2000
+        - read z 3000
+    end
+    transaction:
+        - read y 3500
+        - write z 20 4000
+        - read x 5000
+    end
+    transaction:
+        - read z 6000
+    end
+end
