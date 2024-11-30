@@ -65,7 +65,7 @@ struct MessageResponseCommit {
 };
 
 
-struct ServerCommitRequests {
+struct ProcessingCommitRequests {
     MessageRequestCommit package;
     int fds_index;
 };

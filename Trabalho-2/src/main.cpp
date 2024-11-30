@@ -46,8 +46,6 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
     int my_socket;
     char buffer[PACKET_MAX_SIZE] = {0};
-    vector<WriteOp> ws = {};
-    vector<ReadOp> rs = {};
 
     // Randomly select a server
     int server_id = rand() % n_servers;
@@ -71,6 +69,10 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
     for (auto transaction : my_operations) {
         int transaction_id = (rand() % 10000)*100 + id;
+        bool status = true;
+        vector<WriteOp> ws = {};
+        vector<ReadOp> rs = {};
+
         print_time_sec(&initial_time);
         cout << "Transaction ID: " << transaction_id << endl;
 
@@ -95,7 +97,10 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
             if (op.type == "write") {
                 print_time_sec(&initial_time);
                 cout << "- write " << op.variable_name << " " << op.value << endl;
+
                 ws.push_back(WriteOp{op.variable_name, op.value});
+
+                print_time_sec(&initial_time);
                 cout << "variable " << op.variable_name << " added to ws" << endl << endl;
             }
             else if (op.type == "read") {
@@ -144,20 +149,6 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
             }
         }
 
-        print_time_sec(&initial_time);
-        cout << "Final rs vector: {var_name, value, version}" << endl;
-        for (auto op: rs){
-            cout << "    - { " << op.variable_name << ", " << op.value << ", " << op.version << "}" << endl;
-        }
-        cout << endl;
-
-        cout << "Final ws vector: {var_name, value}" << endl;
-        for (auto op: ws){
-            cout << "    - { " << op.variable_name << ", " << op.value << "}" << endl;
-        }
-        cout << endl;
-
-
         if (!ws.empty()) {
             print_time_sec(&initial_time);
             cout << "Sending commit to server" << endl;
@@ -189,6 +180,7 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
                 cout << "Client received the commit response:" << endl;
                 print(&response);
 
+                status = response.status;
                 if (!response.status) {
                     print_time_sec(&initial_time);
                     cout << "The transaction was aborted!" << endl;
@@ -197,10 +189,29 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
 
                 }
             }
+
+            print_time_sec(&initial_time);
+            cout << "Final rs vector: {var_name, value, version}" << endl;
+            for (auto op: rs){
+                cout << "    - { " << op.variable_name << ", " << op.value << ", " << op.version << "}" << endl;
+            }
+            cout << endl;
+
+            print_time_sec(&initial_time);
+            cout << "Final ws vector: {var_name, value}" << endl;
+            for (auto op: ws){
+                cout << "    - { " << op.variable_name << ", " << op.value << "}" << endl;
+            }
+            cout << endl;
         }
 
         print_time_sec(&initial_time);
-        cout << "End of Transaction " << transaction_id << endl << endl;
+        cout << "Trasaction ended ";
+        if (status) {
+            cout << "with success!" << endl;
+        } else {
+            cout << "with fail" << endl;
+        }
     }
 
     close(my_socket);
@@ -231,18 +242,19 @@ void server_func(int id, vector<DatabaseData> dataBase) {
     tcp_bind(client_socket, INADDR_ANY, tcp_port);
     tcp_listen(client_socket);
 
-
     int sequencer_socket = tcp_create_socket();
     print_time_sec(&initial_time);
     cout << "tcp socket created successfully" << endl;
 
     if (tcp_connect(sequencer_socket, INADDR_ANY, SEQUENCER_PORT)) {
         print_time_sec(&initial_time);
-        cout << "Server connected with sequencer successfully!" << endl;
+        cout << "Server connected with sequencer successfully!" << endl << endl;
     } else {
         print_time_sec(&initial_time);
         cout << "tcp connection failed" << endl;
     }
+
+    vector<ProcessingCommitRequests> requests_to_respond;
 
     vector<pollfd> fds;
     fds.push_back({client_socket, POLLIN, 0});
@@ -256,7 +268,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
             break;
         }
 
-        for (size_t i = 0; i < fds.size(); ++i) {
+        for (int i = 0; i < fds.size(); ++i) {
             if (fds[i].revents & POLLIN) {
                 if (fds[i].fd == client_socket) {
                     // New connection to client
@@ -265,7 +277,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
 
                     new_client_socket = tcp_accept(client_socket, &client_ip);
                     print_time_sec(&initial_time);
-                    cout << "Server accepted a connection" << endl;
+                    cout << "Server accepted a connection" << endl << endl;
 
                     fds.push_back({new_client_socket, POLLIN, 0});
                 }
@@ -277,9 +289,6 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                         stringstream ss(buffer);
                         int ht;
                         ss >> ht;
-
-                        print_time_sec(&initial_time);
-                        cout << "Received something" << endl;
 
                         // request commit
                         if (ht == request_commit) {
@@ -320,8 +329,25 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                             cout << "Server respond the commit request to the sequencer: " << endl;
                             print(&response);
                         }
-                        else if (ht == response_read) {
-                            /* TODO falta aki */ 
+                        else if (ht == response_commit) {
+                            MessageResponseCommit response = unserialize_MessageResponseCommit(&message);
+
+                            print_time_sec(&initial_time);
+                            cout << "Server received response commit from sequencer: " << endl;
+
+                            for (int j=0; j < requests_to_respond.size(); j++) {
+                                if (requests_to_respond[j].package.transaction_id == response.transaction_id) {
+                                    send(fds[requests_to_respond[j].fds_index].fd, message.c_str(), message.size(), 0);
+
+                                    print_time_sec(&initial_time);
+                                    cout << "Server sent response commit to client" << endl;
+                                    print(&response);
+
+                                    requests_to_respond.erase(requests_to_respond.begin()+j);
+                                    break;
+                                }
+                            }
+
                         }
                     }
 
@@ -334,7 +360,6 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                         stringstream ss(buffer);
                         int ht;
                         ss >> ht;
-
 
                         if (ht == request_read) {
                             MessageRequestRead request = unserialize_MessageRequestRead(&message);
@@ -361,10 +386,20 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                         }
 
                         else if (ht == request_commit) {
+                            MessageRequestCommit req_package = unserialize_MessageRequestCommit(&message);
+
                             print_time_sec(&initial_time);
                             cout << "Server commit request from the client. " << endl;
+                            print_time_sec(&initial_time);
                             cout << "Passing to the sequencer." << endl;
                             send(sequencer_socket, message.c_str(), message.size(), 0);
+                            print(&req_package);
+
+                            ProcessingCommitRequests req {
+                                req_package,
+                                i
+                            };
+                            requests_to_respond.push_back(req);
                         }
 
                     }
@@ -378,9 +413,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
             }
         }
     }
-
     close(client_socket);
-
 }
 
 void sequencer_func() {
@@ -396,7 +429,7 @@ void sequencer_func() {
     fds.push_back({my_socket, POLLIN, 0});
     vector<int> servers_sockets;
 
-    queue<ServerCommitRequests> commit_queue;
+    queue<ProcessingCommitRequests> commit_queue;
 
     while (true) {
         int poll_count = poll(fds.data(), fds.size(), -1);
@@ -408,13 +441,13 @@ void sequencer_func() {
         for (size_t i = 0; i < fds.size(); ++i) {
             if (fds[i].revents & POLLIN) {
                 if (fds[i].fd == my_socket) {
-                    // New connection
+                    // New server connection
                     int server_socket;
                     in_addr_t server_ip;
 
                     server_socket = tcp_accept(my_socket, &server_ip);
                     print_time_sec(&initial_time);
-                    cout << "Sequencer accepted a connection" << endl;
+                    cout << "Sequencer accepted a connection" << endl << endl;
 
                     fds.push_back({server_socket, POLLIN, 0});
                     servers_sockets.push_back(server_socket);
@@ -428,11 +461,15 @@ void sequencer_func() {
                         ss >> ht;
 
                         assert(ht == request_commit);
-                        print_time_sec(&initial_time);
-                        cout << "Sequencer received a commit request" << endl;
 
-                        ServerCommitRequests commit;
-                        commit.package = unserialize_MessageRequestCommit(&message);
+                        MessageRequestCommit package = unserialize_MessageRequestCommit(&message);
+
+                        print_time_sec(&initial_time);
+                        cout << "Sequencer received a commit request:" << endl;
+                        print(&package);
+
+                        ProcessingCommitRequests commit;
+                        commit.package = package;
                         commit.fds_index = i;
 
                         commit_queue.push(commit);
@@ -443,7 +480,7 @@ void sequencer_func() {
 
         // Process commit queue if not empty
         if (!commit_queue.empty()) {
-            ServerCommitRequests commit_to_broadcast = commit_queue.front();
+            ProcessingCommitRequests commit_to_broadcast = commit_queue.front();
             commit_queue.pop();
 
             MessageRequestCommit commit_package = commit_to_broadcast.package;
@@ -454,6 +491,7 @@ void sequencer_func() {
 
             print_time_sec(&initial_time);
             cout << "Broadcasted commit request to all servers" << endl;
+            print(&commit_package);
 
             // wait responses from servers
             vector<MessageResponseCommit> responses;
@@ -479,11 +517,15 @@ void sequencer_func() {
                                 responses.push_back(response);
                             }
                             else if (ht == request_commit) {
+
+                                MessageRequestCommit req_commit = unserialize_MessageRequestCommit(&response_message);
+
                                 print_time_sec(&initial_time);
                                 cout << "Sequencer received a commit request" << endl;
+                                print(&req_commit);
 
-                                ServerCommitRequests commit;
-                                commit.package = unserialize_MessageRequestCommit(&response_message);
+                                ProcessingCommitRequests commit;
+                                commit.package = req_commit;
                                 commit.fds_index = i;
 
                                 commit_queue.push(commit);
@@ -516,7 +558,8 @@ void sequencer_func() {
             send(fds[commit_to_broadcast.fds_index].fd, final_response_str.c_str(), final_response_str.size(), 0);
 
             print_time_sec(&initial_time);
-            cout << "Sequencer sent final commit response to client" << endl;
+            cout << "Sequencer sent final commit response to server" << endl;
+            print(&final_response);
         }
     }
     close(my_socket);
