@@ -231,20 +231,21 @@ void client_func(int n_servers, int id, vector<vector<Operation>> my_operations)
                 cout << "The transaction was aborted!" << endl;
             }
 
-            print_time_sec(&initial_time);
-            cout << "Final rs vector: {var_name, value, version}" << endl;
-            for (auto op: rs){
-                cout << "    - { " << op.variable_name << ", " << op.value << ", " << op.version << "}" << endl;
-            }
-            cout << endl;
-
-            print_time_sec(&initial_time);
-            cout << "Final ws vector: {var_name, value}" << endl;
-            for (auto op: ws){
-                cout << "    - { " << op.variable_name << ", " << op.value << "}" << endl;
-            }
-            cout << endl;
         }
+
+        print_time_sec(&initial_time);
+        cout << "Final rs vector: {var_name, value, version}" << endl;
+        for (auto op: rs){
+            cout << "    - { " << op.variable_name << ", " << op.value << ", " << op.version << "}" << endl;
+        }
+        cout << endl;
+
+        print_time_sec(&initial_time);
+        cout << "Final ws vector: {var_name, value}" << endl;
+        for (auto op: ws){
+            cout << "    - { " << op.variable_name << ", " << op.value << "}" << endl;
+        }
+        cout << endl;
 
         print_time_sec(&initial_time);
         cout << "Transaction ended ";
@@ -337,6 +338,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                     } else if (valread == 0) {
                         cout << "Lost connection with sequencer" << endl;
                         close(sequencer_socket);
+                        close(client_socket);
                         return;
                     }
 

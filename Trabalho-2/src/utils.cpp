@@ -83,7 +83,7 @@ void print(MessageRequestCommit* rc) {
     for (auto x : rc->rs) {
         cout << "    - " << x.variable_name << " " << x.value << " " << x.version << endl;
     }
-    cout << "RW (var_name, value): " << endl;
+    cout << "WS (var_name, value): " << endl;
     for (auto x : rc->ws) {
         cout << "    - " << x.variable_name << " " << x.value << endl;
     }
