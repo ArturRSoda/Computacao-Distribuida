@@ -336,6 +336,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
                         continue;
                     } else if (valread == 0) {
                         cout << "Lost connection with sequencer" << endl;
+                        close(sequencer_socket);
                         return;
                     }
 
@@ -510,6 +511,7 @@ void server_func(int id, vector<DatabaseData> dataBase) {
         }
     }
     close(client_socket);
+    close(sequencer_socket);
 }
 
 

@@ -9,6 +9,7 @@ end
 
 client_op:
     transaction:
+        - read c 0
         - read a 1000
         - read b 2000
         - write c 10 3000
@@ -17,17 +18,7 @@ end
 
 client_op:
     transaction:
-        - read a 1000
-        - read b 2000
-        - write c 10 3000
-    end
-    transaction:
-        - read c 4000
-    end
-end
-
-client_op:
-    transaction:
+        - read c 0
         - read a 1000
         - read b 2000
         - write c 10 3000
@@ -39,6 +30,19 @@ end
 
 client_op:
     transaction:
+        - read c 0
+        - read a 1000
+        - read b 2000
+        - write c 10 3000
+    end
+    transaction:
+        - read c 4000
+    end
+end
+
+client_op:
+    transaction:
+        - read c 0
         - read a 1000
         - read b 2000
         - write c 10 3000
